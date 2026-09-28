@@ -1,0 +1,28 @@
+# Configuration for plateau visualization on a 2D plane in GPT-2's residual stream.
+
+model_name: "gpt2-small"  # Loaded via vis_plots/utils.py:load_model (TransformerLens, fold_ln=False)
+prepend_bos: False  # Same convention as vis_plots/interpolate_and_record_activations.py
+
+# Sentences are prefix + " " + word. Each " " + word must be a single GPT-2 token.
+prefix: "The house is"
+token_pairs:
+  - ["large", "big"]
+  - ["large", "in"]
+# The unique words across token_pairs (in order of appearance) are the three anchors of the plane.
+# The plane's origin is the first anchor and its first axis points to the second anchor.
+
+# -1 for the embedding space (embed + pos_embed, i.e. blocks.0.hook_resid_pre), and a non-negative integer k for
+# the output of block k (blocks.k.hook_resid_post). Only the last token position is perturbed.
+source_layer_idx: 6
+
+# Sampling grid on the plane through the three anchor activations.
+grid_resolution: 100  # Points per axis (total = grid_resolution ** 2)
+margin: 0.5  # Padding on each side of the anchors' bounding box, as a fraction of its larger side
+
+# Compute
+batch_size: 64  # Grid points per forward/Jacobian batch
+jacobian_chunk_size: 256  # Output dims per vmap chunk in torch.func.jacrev (lower = less memory)
+
+# Plot
+log_scale: True  # Color the heat map by log10 of the Frobenius norm
+max_label_classes: 7  # Most frequent argmax tokens shown individually; the rest are grouped as "other"
