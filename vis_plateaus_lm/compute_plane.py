@@ -173,7 +173,9 @@ def main():
     source_layer_idx = config['source_layer_idx']
     words = get_anchor_words(config['token_pairs'])
 
-    model, _, device, _ = vis_plots_utils.load_model(config['model_name'])
+    model = vis_plots_utils.load_model(config['model_name'])
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'  # Same device choice as the loader
+    model = model.to(device)
     model.eval()
     print(f"Model: {config['model_name']} | Source layer: {source_layer_idx} ({resid_hook_name(source_layer_idx)}) | Device: {device}")
 
