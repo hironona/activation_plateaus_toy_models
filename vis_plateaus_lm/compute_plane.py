@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Sample last-token activations on the plane spanned by three sentences' last-token activations in GPT-2's residual
-stream (output space of a source layer), label each point with its argmax next token, and compute the Frobenius
-norm of the layerwise Jacobian product from the source layer to the logits. Saves everything to a .pt file that
-plot_plane.py reads (no model needed for plotting).
+Sample last-token activations on a surface through three sentences' last-token activations in GPT-2's residual
+stream (output space of a source layer): the plane through them, or a slerp-like spherical surface (see
+utils.SphericalSurface). Label each point with its argmax next token, and compute the Frobenius norm of the layerwise
+Jacobian product from the source layer to the logits. Saves everything to a .pt file that plot_plane.py reads (no
+model needed for plotting).
 
 Run from the project root (GPU recommended):
-    python vis_plateaus_lm/compute_plane.py [--source_layer_idx 6]
+    python vis_plateaus_lm/compute_plane.py [--source_layer_idx 6] [--surface spherical]
 """
 
 import os
@@ -17,8 +18,8 @@ import torch
 from tqdm import tqdm
 
 sys.path.append('./vis_plateaus_lm')
-from utils import (load_config, get_anchor_words, resid_hook_name, build_plane_basis, project_to_plane,
-                   plane_to_ambient, make_plane_grid, grid_coords, construct_filepath)
+from utils import (load_config, get_anchor_words, resid_hook_name, build_surface, make_plane_grid, grid_coords,
+                   construct_filepath, SURFACES)
 from compute_metrics import (forward_from_layer, unembed_gram_factor, jacobian_norm_layerwise_prod_to_logits,
                              jacobian_norm_direct_to_logits)
 
@@ -83,17 +84,20 @@ def compute_plane(model, tokens: torch.Tensor, words, config, source_layer_idx: 
     # 1. Last-token activations of the three sentences in the output space of the source layer
     anchors, contexts, anchor_logits_full = collect_anchor_activations(model, tokens, source_layer_idx)
 
-    # 2. Plane through the three activations, and a grid of samples on it
-    origin, basis = build_plane_basis(anchors)
-    anchor_coords = project_to_plane(anchors, origin, basis)
-    reconstruction_error = (plane_to_ambient(anchor_coords, origin, basis) - anchors.double()).norm(dim=1).max().item()
-    assert reconstruction_error < 1e-6 * anchors.norm(dim=1).max().item(), f"Anchors are not on the plane: {reconstruction_error}"
+    # 2. Surface (plane or slerp-like sphere) through the three activations, and a grid of samples on it
+    surface_name = config.get('surface', 'flat')
+    surface = build_surface(anchors, surface_name)
+    anchor_coords = surface.to_coords(anchors)
+    reconstruction_error = (surface.to_ambient(anchor_coords) - anchors.double()).norm(dim=1).max().item()
+    assert reconstruction_error < 1e-6 * anchors.norm(dim=1).max().item(), f"Anchors are not on the {surface_name} surface: {reconstruction_error}"
 
     axis_u, axis_v = make_plane_grid(anchor_coords.cpu(), config['grid_resolution'], config['margin'])
     coords = grid_coords(axis_u, axis_v).to(device)  # [N, 2]
-    samples = plane_to_ambient(coords, origin, basis).float()  # [N, d]
-    print(f"Anchor distances: |{words[0]}-{words[1]}| = {anchor_coords[1].norm():.2f}, |{words[0]}-{words[2]}| = {anchor_coords[2].norm():.2f}")
-    print(f"Grid: {config['grid_resolution']}x{config['grid_resolution']} = {samples.shape[0]} points, side {axis_u[-1] - axis_u[0]:.2f}")
+    surface.validate_grid(coords)
+    samples = surface.to_ambient(coords).float()  # [N, d]
+    unit = "" if surface_name == 'flat' else " rad"
+    print(f"Surface: {surface_name} | Anchor coords: {words[1]} = {anchor_coords[1].tolist()}, {words[2]} = {anchor_coords[2].tolist()} (origin {words[0]})")
+    print(f"Grid: {config['grid_resolution']}x{config['grid_resolution']} = {samples.shape[0]} points, side {axis_u[-1] - axis_u[0]:.3f}{unit}")
 
     # 3. Label each sample with its argmax next token and compute the Jacobian product norm
     gram_factor = unembed_gram_factor(model).to(device)
@@ -137,9 +141,10 @@ def compute_plane(model, tokens: torch.Tensor, words, config, source_layer_idx: 
         'source_layer_idx': source_layer_idx,
         'hook_name': resid_hook_name(source_layer_idx),
         'n_layers': n_layers,
-        # Plane
-        'origin': origin.cpu(),  # [d]
-        'basis': basis.cpu(),  # [2, d]
+        # Surface: flat -> 'origin' [d], 'basis' [2, d]; spherical -> 'direction_origin' [d], 'basis' [2, d] (tangent
+        # plane at direction_origin), 'norm_origin' [], 'norm_gradient' [2] (see utils.SphericalSurface)
+        'surface': surface_name,
+        **surface.params(),
         'axis_u': axis_u,  # [R]
         'axis_v': axis_v,  # [R]; grid point (r, c) = (axis_u[c], axis_v[r]), flattened row-major
         # Anchors (the three sentences)
@@ -150,7 +155,7 @@ def compute_plane(model, tokens: torch.Tensor, words, config, source_layer_idx: 
         'anchor_jacobian_norms': anchor_results['metric_values'],
         # Samples
         'sample_activations': samples.cpu(),  # [N, d]
-        'sample_coords': project_to_plane(samples, origin, basis).cpu(),  # [N, 2]
+        'sample_coords': surface.to_coords(samples).cpu(),  # [N, 2] (float32 round trip of the grid coordinates)
         'labels': sample_results['labels'],  # [N] argmax next-token ids
         'label_probs': sample_results['label_probs'],  # [N] probability of the argmax token
         'logit_margins': sample_results['logit_margins'],  # [N] top-1 minus top-2 logit
@@ -162,14 +167,17 @@ def compute_plane(model, tokens: torch.Tensor, words, config, source_layer_idx: 
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Sample and label activations on the plane through three last-token activations')
+    parser = argparse.ArgumentParser(description='Sample and label activations on a surface (plane or slerp-like sphere) through three last-token activations')
     parser.add_argument('--config', type=str, default='./vis_plateaus_lm/config.yaml', help='Path to config file')
     parser.add_argument('--source_layer_idx', type=int, help='Override source_layer_idx from config')
+    parser.add_argument('--surface', type=str, choices=SURFACES, help='Override surface from config')
     args = parser.parse_args()
 
     config = load_config(args.config)
     if args.source_layer_idx is not None:
         config['source_layer_idx'] = args.source_layer_idx
+    if args.surface is not None:
+        config['surface'] = args.surface
     source_layer_idx = config['source_layer_idx']
     words = get_anchor_words(config['token_pairs'])
 
@@ -177,7 +185,7 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'  # Same device choice as the loader
     model = model.to(device)
     model.eval()
-    print(f"Model: {config['model_name']} | Source layer: {source_layer_idx} ({resid_hook_name(source_layer_idx)}) | Device: {device}")
+    print(f"Model: {config['model_name']} | Source layer: {source_layer_idx} ({resid_hook_name(source_layer_idx)}) | Surface: {config.get('surface', 'flat')} | Device: {device}")
 
     tokens = tokenize_sentences(model, config['prefix'], words, config['prepend_bos']).to(device)
     for row in tokens:

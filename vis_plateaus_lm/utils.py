@@ -99,14 +99,117 @@ def grid_coords(axis_u: torch.Tensor, axis_v: torch.Tensor) -> torch.Tensor:
     return torch.stack([uu.reshape(-1), vv.reshape(-1)], dim=1)
 
 
+SURFACES = ('flat', 'spherical')
+
+
+class FlatSurface:
+    """Affine plane through the three anchors. Coordinates are Euclidean distances in the plane."""
+
+    def __init__(self, anchors: torch.Tensor):
+        self.origin, self.basis = build_plane_basis(anchors)
+
+    def to_ambient(self, coords: torch.Tensor) -> torch.Tensor:
+        """[n, 2] -> [n, d]"""
+        return plane_to_ambient(coords, self.origin, self.basis)
+
+    def to_coords(self, points: torch.Tensor) -> torch.Tensor:
+        """[n, d] -> [n, 2] (orthogonal projection onto the plane)"""
+        return project_to_plane(points, self.origin, self.basis)
+
+    def validate_grid(self, coords: torch.Tensor):
+        pass
+
+    def params(self) -> Dict[str, torch.Tensor]:
+        return {'origin': self.origin.cpu(), 'basis': self.basis.cpu()}
+
+
+class SphericalSurface:
+    """
+    Curved surface through the three anchors, generalizing vis_plots/utils.py:slerp_rescale from a path to a surface:
+    the direction moves along the unit sphere and the norm is interpolated linearly.
+
+    Directions d_k = a_k / ||a_k|| lie on the unit 2-sphere of span(d_0, d_1, d_2). That sphere is charted by the log
+    map at d_0 (azimuthal equidistant chart), so a coordinate w = (u, v) is a tangent vector whose length is the
+    geodesic angle from d_0 (radians). The norm r(w) is affine in w, fitted so r = ||a_k|| at each anchor. A point is
+        x(w) = r(w) * exp_{d_0}(w),   exp_{d_0}(w) = cos|w| d_0 + sin|w| (u e_1 + v e_2) / |w|.
+    Along the ray w = t * log_{d_0}(d_k), this is exactly slerp_rescale(a_0, a_k, t).
+    """
+
+    def __init__(self, anchors: torch.Tensor):
+        anchors = anchors.double()
+        norms = torch.norm(anchors, dim=1)
+        directions = anchors / norms.unsqueeze(1)
+        self.direction_origin = directions[0]
+
+        # Orthonormal basis of the tangent plane at d_0 within span(d_0, d_1, d_2); e_1 points toward d_1
+        t1 = directions[1] - (directions[1] @ self.direction_origin) * self.direction_origin
+        t2 = directions[2] - (directions[2] @ self.direction_origin) * self.direction_origin
+        assert torch.norm(t1) > 1e-6 and torch.norm(t2) > 1e-6, "An anchor is (anti)parallel to the first anchor"
+        e1 = t1 / torch.norm(t1)
+        w2 = t2 - (t2 @ e1) * e1
+        assert torch.norm(w2) > 1e-6 * torch.norm(t2), "The three anchor directions lie on one great circle"
+        self.basis = torch.stack([e1, w2 / torch.norm(w2)])
+
+        # Norm is affine in the chart: r(w) = norm_origin + w @ norm_gradient, with r = ||a_k|| at each anchor
+        self.norm_origin = norms[0]
+        anchor_coords = self._log_map(directions)
+        self.norm_gradient = torch.linalg.solve(anchor_coords[1:], norms[1:] - norms[0])
+
+    def _log_map(self, directions: torch.Tensor) -> torch.Tensor:
+        """Unit vectors [n, d] -> chart coordinates [n, 2]"""
+        cos_angle = (directions @ self.direction_origin).clamp(-1.0, 1.0)
+        angle = torch.acos(cos_angle)
+        tangent = (directions - cos_angle.unsqueeze(1) * self.direction_origin) @ self.basis.T  # [n, 2], length sin(angle)
+        tangent_norm = torch.norm(tangent, dim=1, keepdim=True)
+        return torch.where(tangent_norm > 1e-12, tangent / tangent_norm.clamp(min=1e-12) * angle.unsqueeze(1), torch.zeros_like(tangent))
+
+    def radius(self, coords: torch.Tensor) -> torch.Tensor:
+        """[n, 2] -> [n] interpolated norm"""
+        return self.norm_origin + coords.double() @ self.norm_gradient
+
+    def to_ambient(self, coords: torch.Tensor) -> torch.Tensor:
+        """[n, 2] -> [n, d]"""
+        coords = coords.double()
+        angle = torch.norm(coords, dim=1, keepdim=True)
+        # sin|w| / |w| without dividing by zero at the origin (torch.sinc(x) = sin(pi x) / (pi x))
+        direction = torch.cos(angle) * self.direction_origin + torch.sinc(angle / torch.pi) * (coords @ self.basis)
+        return self.radius(coords).unsqueeze(1) * direction
+
+    def to_coords(self, points: torch.Tensor) -> torch.Tensor:
+        """[n, d] -> [n, 2] (exact for points on the surface; others are projected onto span(d_0, d_1, d_2) first)"""
+        points = points.double()
+        return self._log_map(points / torch.norm(points, dim=1, keepdim=True))
+
+    def validate_grid(self, coords: torch.Tensor):
+        """The chart is one-to-one only within angle pi of d_0, and the interpolated norm must stay positive."""
+        max_angle = torch.norm(coords.double(), dim=1).max().item()
+        assert max_angle < torch.pi, f"Grid reaches angle {max_angle:.3f} >= pi from the first anchor; reduce margin"
+        min_radius = self.radius(coords).min().item()
+        assert min_radius > 0, f"Interpolated norm reaches {min_radius:.3f} <= 0 on the grid; reduce margin"
+
+    def params(self) -> Dict[str, torch.Tensor]:
+        return {'direction_origin': self.direction_origin.cpu(), 'basis': self.basis.cpu(),
+                'norm_origin': self.norm_origin.cpu(), 'norm_gradient': self.norm_gradient.cpu()}
+
+
+def build_surface(anchors: torch.Tensor, surface: str):
+    """Sampling surface through the three anchors [3, d]: 'flat' (affine plane) or 'spherical' (slerp-like)."""
+    if surface == 'flat':
+        return FlatSurface(anchors)
+    if surface == 'spherical':
+        return SphericalSurface(anchors)
+    raise ValueError(f"Unknown surface: {surface}. Options: {SURFACES}")
+
+
 def _slug(text: str) -> str:
     return re.sub(r'[^A-Za-z0-9]+', '_', text).strip('_')
 
 
 def construct_filepath(config: Dict, source_layer_idx: int) -> str:
-    """Path of the saved activations/metrics for one source layer."""
+    """Path of the saved activations/metrics for one source layer. Flat keeps the original (suffix-free) name."""
     words = get_anchor_words(config['token_pairs'])
-    filename = f"{_slug(config['prefix'])}__{'_'.join(_slug(w) for w in words)}__layer{source_layer_idx}_res{config['grid_resolution']}.pt"
+    surface_suffix = "" if config.get('surface', 'flat') == 'flat' else f"_{config['surface']}"
+    filename = f"{_slug(config['prefix'])}__{'_'.join(_slug(w) for w in words)}__layer{source_layer_idx}_res{config['grid_resolution']}{surface_suffix}.pt"
     return os.path.join("./activations", config['model_name'], "lm_plane", filename)
 
 

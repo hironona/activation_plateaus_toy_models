@@ -15,7 +15,7 @@ The project follows a four-phase workflow, focused on toy ResNet models trained 
 2. **Record activations** (`vis_plots/interpolate_and_record_activations.py`) — Interpolate between input pairs (simple linear interpolation), run through the model, and record residual stream activations at every layer. Saves `.pt` files to `activations/`.
 3. **Plot interpolation metrics** (`vis_plots/*_plots.py`, `vis_plots/jacobians_*.py`) — Load recorded activations and plot step sizes, relative distances, spline (Hamming) distances, and Jacobian norms across layers. All plotting scripts support `--multi_seed` for aggregation with confidence intervals.
 4. **Visualize plateau geometry** (`vis_plateaus/`) — Sample points in input/activation space, color by a metric (L2 norm, Jacobian norm/determinant), and plot directly. Includes contour visualization of open-ball pre-images.
-5. **Visualize plateau geometry in GPT-2** (`vis_plateaus_lm/`) — Take the last-token activations of three sentences (e.g. "The house is" + " large"/" big"/" in") in the output space of a source layer, sample a grid on the plane through them, label each point with its argmax next token, and color it by the Frobenius norm of the layerwise Jacobian product from the source layer to the logits.
+5. **Visualize plateau geometry in GPT-2** (`vis_plateaus_lm/`) — Take the last-token activations of three sentences (e.g. "The house is" + " large"/" big"/" in") in the output space of a source layer, sample a grid on the plane (or the slerp-like spherical surface) through them, label each point with its argmax next token, and color it by the Frobenius norm of the layerwise Jacobian product from the source layer to the logits.
 
 ## Quick Start
 
@@ -92,7 +92,7 @@ All scripts must be run from the project root.
 - **`train/config.yaml`**: Model architecture (`hidden_dim`, `resblock_width`, `num_blocks`), training settings (`lr`, `batch_size`, `epochs`, `lr_scheduler`), task (`class_spiral`/`reg_sine_wave`, `noise_std`, `num_classes`, `distribution`), multi-seed `n_runs`, and `checkpoint_name`.
 - **`vis_plots/config.yaml`**: `n_steps` (interpolation resolution), `model_names` (checkpoint paths per model type), `layer_to_interpolate_toy_resnet` (hook layer index: `-2` = input, `-1` = embed, `0+` = residual blocks), input pairs for each data type.
 - **`vis_plateaus/config.yaml`**: `metric` (one of `l2_norm`, `jacobian_norm_full`, `jacobian_norm_layerwise_prod`, `jacobian_determinant_full`, `jacobian_determinant_layerwise_prod`), `source_layer_idx`/`target_layer_idx`, `n_points`, `radius`, `reference_point`, `n_pca_components`, `log_scale`.
-- **`vis_plateaus_lm/config.yaml`**: `model_name`, `prefix` and `token_pairs` (the three unique words span the plane; each `" " + word` must be one token), `source_layer_idx` (`-1` = embedding, `k` = output of block `k`), `grid_resolution`, `margin`, `batch_size`, `jacobian_chunk_size`, `log_scale`, `max_label_classes`.
+- **`vis_plateaus_lm/config.yaml`**: `model_name`, `prefix` and `token_pairs` (the three unique words span the plane; each `" " + word` must be one token), `source_layer_idx` (`-1` = embedding, `k` = output of block `k`), `surface` (`flat` = affine plane; `spherical` = slerp-like curved surface whose edges from the first anchor are exactly the `slerp_rescale` paths), `grid_resolution`, `margin`, `batch_size`, `jacobian_chunk_size`, `log_scale`, `max_label_classes`.
 - **`vis_plateaus/contour_config.yaml`**: Same spatial settings plus `n_contour_levels`, `contour_level_spacing` (`even`/`log`), and `sub_reference_points` for marking additional points on the plot.
 
 ## Key Flags
@@ -108,6 +108,7 @@ All scripts must be run from the project root.
 | `visualize_plateaus.py` / `visualize_contours.py` | `--model_path` | Override checkpoint path from config |
 | `visualize_plateaus.py` / `visualize_contours.py` | `--multi_seed` | Average metrics across seed checkpoints |
 | `compute_plane.py` / `plot_plane.py` | `--source_layer_idx N` | Override the source layer from config |
+| `compute_plane.py` / `plot_plane.py` | `--surface flat\|spherical` | Override the sampling surface from config |
 | `plot_plane.py` | `--input PATH` | Plot a specific `.pt` file |
 
 ## Model Architecture

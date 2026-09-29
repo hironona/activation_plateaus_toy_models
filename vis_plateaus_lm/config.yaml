@@ -15,7 +15,15 @@ token_pairs:
 # the output of block k (blocks.k.hook_resid_post). Only the last token position is perturbed.
 source_layer_idx: 6
 
-# Sampling grid on the plane through the three anchor activations.
+# Surface through the three anchor activations on which points are sampled.
+#   "flat": affine plane through the three points. Grid coordinates are Euclidean distances.
+#   "spherical": slerp-like curved surface (see vis_plots/utils.py:slerp_rescale). The direction moves along the unit
+#     sphere spanned by the three directions and the norm is interpolated linearly, so the paths from the first anchor
+#     to the other two are exactly their slerp_rescale paths. Grid coordinates are geodesic angles (radians) from the
+#     first anchor's direction.
+surface: "flat"
+
+# Sampling grid on the surface (a square in its 2D coordinates).
 grid_resolution: 100  # Points per axis (total = grid_resolution ** 2)
 margin: 0.5  # Padding on each side of the anchors' bounding box, as a fraction of its larger side
 
