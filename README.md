@@ -15,6 +15,7 @@ The project follows a four-phase workflow, focused on toy ResNet models trained 
 2. **Record activations** (`vis_plots/interpolate_and_record_activations.py`) — Interpolate between input pairs (simple linear interpolation), run through the model, and record residual stream activations at every layer. Saves `.pt` files to `activations/`.
 3. **Plot interpolation metrics** (`vis_plots/*_plots.py`, `vis_plots/jacobians_*.py`) — Load recorded activations and plot step sizes, relative distances, spline (Hamming) distances, and Jacobian norms across layers. All plotting scripts support `--multi_seed` for aggregation with confidence intervals.
 4. **Visualize plateau geometry** (`vis_plateaus/`) — Sample points in input/activation space, color by a metric (L2 norm, Jacobian norm/determinant), and plot directly. Includes contour visualization of open-ball pre-images.
+5. **Visualize plateau geometry in GPT-2** (`vis_plateaus_lm/`) — Take the last-token activations of three sentences (e.g. "The house is" + " large"/" big"/" in") in the output space of a source layer, sample a grid on the plane (or the slerp-like spherical surface) through them, label each point with its argmax next token, and color it by the Frobenius norm of the layerwise Jacobian product from the source layer to the logits.
 
 ## Quick Start
 
@@ -36,6 +37,9 @@ bash run/vis_plateaus.sh
 
 # 6. Visualize contour pre-images
 bash run/vis_contours.sh
+
+# 7. GPT-2 plane visualization (compute on GPU, plot anywhere from the saved .pt)
+bash run/vis_plateaus_lm.sh
 ```
 
 All scripts must be run from the project root.
@@ -72,6 +76,12 @@ All scripts must be run from the project root.
 │   ├── config.yaml            # Plateau vis settings
 │   ├── contour_config.yaml   # Contour vis settings (levels, spacing, sub-reference points)
 │   └── kl_config.yaml        # KL heatmap settings (reference point, log scale)
+├── vis_plateaus_lm/        # Plateau geometry on a 2D plane in GPT-2's residual stream
+│   ├── compute_plane.py   # Sample the plane, label by argmax next token, Jacobian norms → .pt (needs the model)
+│   ├── plot_plane.py      # Heat map + decision boundaries, argmax-label map (reads the .pt only)
+│   ├── compute_metrics.py # Last-token forward passes and layerwise Jacobian product to logits
+│   ├── utils.py           # Plane geometry, grid, paths
+│   └── config.yaml        # Model, prefix, token pairs, source layer, grid settings
 ├── run/                    # Shell scripts for running experiments
 ├── activations/            # Recorded activation .pt files (intermediate)
 ├── checkpoints/            # Trained model weights
@@ -86,6 +96,7 @@ All scripts must be run from the project root.
 - **`vis_plateaus/config.yaml`**: `metric` (one of `l2_norm`, `jacobian_norm_full`, `jacobian_norm_layerwise_prod`, `jacobian_determinant_full`, `jacobian_determinant_layerwise_prod`), `source_layer_idx`/`target_layer_idx`, `n_points`, `radius`, `reference_point`, `n_pca_components`, `log_scale`.
 - **`vis_plateaus/contour_config.yaml`**: Same spatial settings plus `n_contour_levels`, `contour_level_spacing` (`even`/`log`), and `sub_reference_points` for marking additional points on the plot.
 - **`vis_plateaus/kl_config.yaml`**: `n_points`, `radius`, `reference_point` (x* in KL(p(y|x*) ‖ p(y|x))), `sub_reference_points`, `log_scale`, `kl_floor` (lower clip for the log color scale).
+- **`vis_plateaus_lm/config.yaml`**: `model_name`, `prefix` and `token_pairs` (the three unique words span the plane; each `" " + word` must be one token), `source_layer_idx` (`-1` = embedding, `k` = output of block `k`), `surface` (`flat` = affine plane; `spherical` = slerp-like curved surface whose edges from the first anchor are exactly the `slerp_rescale` paths), `grid_resolution`, `margin`, `batch_size`, `jacobian_chunk_size`, `log_scale`, `max_label_classes`.
 
 ## Key Flags
 
@@ -99,6 +110,9 @@ All scripts must be run from the project root.
 | `relative_distances_layerwise_plots.py` | `--single_layer N` | Plot only for target layer N |
 | `visualize_plateaus.py` / `visualize_contours.py` / `visualize_kl.py` | `--model_path` | Override checkpoint path from config |
 | `visualize_plateaus.py` / `visualize_contours.py` / `visualize_kl.py` | `--multi_seed` | Average metrics across seed checkpoints |
+| `compute_plane.py` / `plot_plane.py` | `--source_layer_idx N` | Override the source layer from config |
+| `compute_plane.py` / `plot_plane.py` | `--surface flat\|spherical` | Override the sampling surface from config |
+| `plot_plane.py` | `--input PATH` | Plot a specific `.pt` file |
 
 ## Model Architecture
 
