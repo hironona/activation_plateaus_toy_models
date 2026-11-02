@@ -9,6 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 import yaml
+from scipy.stats import norm
 from typing import List, Dict, Union
 
 import sys
@@ -126,18 +127,26 @@ def aggregate_metric_data(
     all_seeds_data: List[Dict[str, Union[Dict[str, torch.Tensor], torch.Tensor]]],
     confidence_level: float = 0.95
 ) -> tuple:
-    """Aggregate plot_data dicts across seeds into mean and std dicts.
+    """Aggregate plot_data dicts across seeds into the mean and the half-width of its confidence interval.
 
     Handles both multi-layer format {pair: {layer: tensor}} and
     single-line format {pair: tensor}.
-    
-        Args:
+
+    Args:
         all_seeds_data: List of plot_data dicts from different seeds, each with the same structure.
-        confidence_level: Confidence level for standard deviation calculation (default: 0.95).
+        confidence_level: Confidence level of the interval (default: 0.95, i.e. mean ± 1.96 · std / sqrt(n)).
 
     Returns:
-        (mean_dict, std_dict) with the same structure as each input dict.
+        (mean_dict, std_dict) with the same structure as each input dict. std_dict holds the CI half-widths.
     """
+    z = norm.ppf(0.5 + confidence_level / 2)  # 1.96 for 0.95
+
+    def ci_half_width(stacked: torch.Tensor) -> torch.Tensor:
+        n = stacked.shape[0]
+        if n == 1:
+            return torch.zeros_like(stacked[0])
+        return stacked.std(dim=0) * z / np.sqrt(n)
+
     mean_dict = {}
     std_dict = {}
     # Use first seed as reference for keys
@@ -151,18 +160,14 @@ def aggregate_metric_data(
             for layer_key in sample:
                 stacked = torch.stack([seed[pair_key][layer_key] for seed in all_seeds_data])
                 mean_layers[layer_key] = stacked.mean(dim=0)
-                n = stacked.shape[0]
-                stds = stacked.std(dim=0) if n > 1 else torch.zeros_like(stacked[0])
-                std_layers[layer_key] = stds * confidence_level / np.sqrt(n)
+                std_layers[layer_key] = ci_half_width(stacked)
             mean_dict[pair_key] = mean_layers
             std_dict[pair_key] = std_layers
         else:
             # Single tensor
             stacked = torch.stack([seed[pair_key] for seed in all_seeds_data])
             mean_dict[pair_key] = stacked.mean(dim=0)
-            n = stacked.shape[0]
-            stds = stacked.std(dim=0) if n > 1 else torch.zeros_like(stacked[0])
-            std_dict[pair_key] = stds * confidence_level / np.sqrt(n)
+            std_dict[pair_key] = ci_half_width(stacked)
     return mean_dict, std_dict
 
 

@@ -10,7 +10,7 @@ from tqdm import tqdm
 import sys
 sys.path.append('./vis_plots')
 sys.path.append('./common')
-from utils import load_config, load_activations, generate_interpolation_results_plot, get_seed_checkpoints, get_checkpoint_dir, get_pairs_ids, aggregate_metric_data, pairs_plot_dir
+from utils import load_config, load_activations, generate_interpolation_results_plot, get_seed_checkpoints, get_checkpoint_dir, get_pairs_ids, aggregate_metric_data, pairs_plot_dir, layer_label
 from checkpoints import load_model_from_checkpoint
 
 config = load_config()
@@ -119,12 +119,13 @@ def compute_jacobian_unembed_toy(model, last_block_data: torch.Tensor, device: s
 def compute_layerwise_data_for_model(checkpoint_path, pairs_ids, layer_to_interpolate, n_steps):
     """Compute layerwise jacobian norms and product norms for a single model checkpoint.
 
-    Includes the embedding (Input→Embed) and unembedding (LastBlock→Logits) Jacobians. The product norm is:
-        ||J_unembed · J_{n-1} · ... · J_0 · J_embed||_F
+    J_k is the Jacobian of block k. The chain starts at the interpolated layer; when interpolating at the input
+    (layer_to_interpolate = -2) it covers the whole network and the product norm is
+        ||J_unembed · J_{n-1} · ... · J_0 · J_embed||_F = ||∂logits / ∂input||_F
 
     Returns:
         (layerwise_norms_data, product_norms_data)
-        layerwise_norms_data: {pair_key: {f"block {i} → {i+1}": tensor}} — multi-layer format
+        layerwise_norms_data: {pair_key: {"embed → block 0": tensor, ...}} — multi-layer format
         product_norms_data: {pair_key: tensor} — single-line format
     """
     model, _, _ = load_model_from_checkpoint(checkpoint_path)
@@ -151,14 +152,15 @@ def compute_layerwise_data_for_model(checkpoint_path, pairs_ids, layer_to_interp
             embed_jac = compute_jacobian_embed_toy(model, input_data, device)
             layer_norms["input → embed"] = torch.norm(embed_jac.view(embed_jac.shape[0], -1), dim=1)
 
-        # --- Hidden layer Jacobians ---
-        for layer_idx in tqdm(range(0, n_layers - 1), desc=f"Layerwise Jacobians {pair_key}", leave=False):
+        # --- Block Jacobians: layer_idx's resid_post -> block layer_idx+1 (embed -> block 0 first) ---
+        first_layer = max(layer_to_interpolate, -1)
+        for layer_idx in tqdm(range(first_layer, n_layers - 1), desc=f"Layerwise Jacobians {pair_key}", leave=False):
             resid_post = activations[f'layer{layer_idx}_resid_post']
 
             jacobians = compute_jacobian_layerwise_toy(model, resid_post, layer_idx, device, activations)
 
             norms = torch.norm(jacobians.view(jacobians.shape[0], -1), dim=1)
-            layer_norms[f"block {layer_idx} → {layer_idx+1}"] = norms
+            layer_norms[f"{layer_label(layer_idx)} → {layer_label(layer_idx + 1)}"] = norms
             jacs_list.append(jacobians)
 
             del resid_post
