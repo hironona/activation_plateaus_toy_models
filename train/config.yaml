@@ -6,19 +6,17 @@ model:
   num_blocks: 10
   dropout: 0.0
 
-model_type: "ResNetMLP" # Options: "ResNetMLP", "ResNetMLPSkeleton"
-
 training:
   batch_size: 64
   learning_rate: 1e-4
   weight_decay: 0.01
   epochs: 500
   save_every: 100
-  seed: 0
-  checkpoint_dir: "./checkpoints"
-  checkpoint_name: "noise-0.00-multi_seed_5_runs" # e.g. "noise-0.00-multi_seed_5_runs"
-  checkpoint_description: "std=0.00, num_samples=20000, shuffle=True, lr=1e-4, weight_decay=0.01, epochs=500, batch_size=64, seed=0"
-  n_runs: 5
+  seed: 0     # First seed; seeds seed, seed+1, ..., seed+n_seeds-1 are trained
+  n_seeds: 5
+  # Checkpoints go to {checkpoint_root}/{task.name}/noise-{task.noise_std}[-{run_tag}]/seed-{k}/
+  checkpoint_root: "checkpoints"
+  run_tag: null  # Optional suffix to tell apart runs with the same task and noise, e.g. "epoch500"
   val_split: 0.1 # fraction of data used for validation
   lr_scheduler: "cosine" # Options: "cosine", "none"
 

@@ -1,17 +1,20 @@
 import argparse
 import json
 import os
+import sys
 import yaml
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
-from datetime import datetime
 import numpy as np
 
-from model import ResNetMLP, ResNetMLPSkeleton
+from model import ResNetMLP
 from data import ToyDataset
+
+sys.path.append('./common')
+from checkpoints import run_dir, seed_dir
 
 def load_config(config_path):
     with open(config_path, 'r') as f:
@@ -59,12 +62,8 @@ def evaluate(model, dataloader, criterion, device, classification, num_classes):
     avg_acc = total_correct / total_samples if classification else None
     return avg_loss, avg_acc
 
-def train_single_model(config: dict):
-    # Set Seed
-    seed = config['training']['seed']
+def train_single_model(config: dict, seed: int, checkpoint_dir: str):
     set_seed(seed)
-
-    model_type = config['model_type']
 
     # Device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -98,26 +97,7 @@ def train_single_model(config: dict):
 
     # Model
     print("Initializing model...")
-    if model_type == "ResNetMLP":
-        model = ResNetMLP(
-            input_dim=config['model']['input_dim'],
-            output_dim=config['model']['output_dim'],
-            hidden_dim=config['model']['hidden_dim'],
-            resblock_width=config['model']['resblock_width'],
-            num_blocks=config['model']['num_blocks'],
-            dropout=config['model']['dropout'],
-        ).to(device)
-    elif model_type == "ResNetMLPSkeleton":
-        model = ResNetMLPSkeleton(
-            input_dim=config['model']['input_dim'],
-            output_dim=config['model']['output_dim'],
-            hidden_dim=config['model']['hidden_dim'],
-            resblock_width=config['model']['resblock_width'],
-            num_blocks=config['model']['num_blocks'],
-            dropout=config['model']['dropout'],
-        ).to(device)
-    else:
-        raise ValueError(f"Unknown model type: {model_type}")
+    model = ResNetMLP(**config['model']).to(device)
 
     # Optimizer & Loss
     optimizer = optim.AdamW(model.parameters(), lr=float(config['training']['learning_rate']), weight_decay=float(config['training']['weight_decay']))
@@ -135,10 +115,6 @@ def train_single_model(config: dict):
     if lr_scheduler_type == 'cosine':
         scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
-    # Directories
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    checkpoint_name = config['training']['checkpoint_name']
-    checkpoint_dir = f"{config['training']['checkpoint_dir']}/{task_name}/{model_type}/{checkpoint_name}/{timestamp}"
     os.makedirs(checkpoint_dir, exist_ok=True)
 
     # Metrics history
@@ -263,9 +239,6 @@ def train_single_model(config: dict):
     with open(os.path.join(checkpoint_dir, "config.yaml"), "w") as f:
         yaml.dump(config, f)
 
-    with open(os.path.join(checkpoint_dir, "description.txt"), "w") as f:
-        f.write(config['training']['checkpoint_description'])
-
     # Clean up
     del model, optimizer, criterion
     if torch.cuda.is_available():
@@ -274,31 +247,31 @@ def train_single_model(config: dict):
     print(f"Training finished. Best val_loss: {best_val_loss:.4f}")
 
 def main():
-    parser = argparse.ArgumentParser(description="Train ResNet MLP on Toy Tasks")
+    parser = argparse.ArgumentParser(description="Train ResNet MLP on Toy Tasks (one model per seed)")
     parser.add_argument("--config", type=str, default="train/config.yaml", help="Path to config file")
     parser.add_argument("--dry_run", action="store_true", help="Run a single epoch for testing")
-    parser.add_argument("--multi_seed", action="store_true", help="Aggregate across multiple seeds (toy_resnet only)")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing seed directories")
     args = parser.parse_args()
 
-    # Load Config
     config = load_config(args.config)
-
-    seed = config['training']['seed']
-    n_runs = config['training']['n_runs']
-
     if args.dry_run:
         config['dry_run'] = True
 
-    if args.multi_seed:
-        config['training']['checkpoint_name'] += f"-multi_seed_{n_runs}_runs"
-        print(f"Running for {n_runs} runs...")
-        for seed in range(seed, seed + n_runs):
-            print(f"\n=== Training with seed {seed} ===")
-            config['training']['seed'] = seed
-            train_single_model(config)
-    else:
-        print(f"Running for a single run...")
-        train_single_model(config)
+    training = config['training']
+    run_directory = run_dir(config['task']['name'], config['task']['noise_std'], training.get('run_tag'),
+                            root=training['checkpoint_root'])
+    seeds = range(training['seed'], training['seed'] + training['n_seeds'])
+
+    # Fail before training anything rather than overwriting finished seeds
+    existing = [seed_dir(run_directory, s) for s in seeds if os.path.isdir(seed_dir(run_directory, s))]
+    if existing and not args.overwrite:
+        raise FileExistsError(f"Seed directories already exist (pass --overwrite to replace): {existing}")
+
+    print(f"Training {len(seeds)} seeds into {run_directory}")
+    for seed in seeds:
+        print(f"\n=== Training with seed {seed} ===")
+        config['training']['seed'] = seed
+        train_single_model(config, seed, seed_dir(run_directory, seed))
 
 if __name__ == "__main__":
     main()

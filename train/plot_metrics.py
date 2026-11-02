@@ -1,15 +1,19 @@
 """Plot training curves from saved metrics.json files.
 
 Usage:
-    python train/plot_metrics.py --checkpoint_dir checkpoints/class_spiral/ResNetMLP/noise-0.1/20240101_120000
-    python train/plot_metrics.py --checkpoint_dir checkpoints/class_spiral/ResNetMLP/noise-0.1-multi_seed_5_runs  # aggregates all seed runs
+    python train/plot_metrics.py --checkpoint_dir checkpoints/class_spiral/noise-0.00         # aggregates all seeds
+    python train/plot_metrics.py --checkpoint_dir checkpoints/class_spiral/noise-0.00/seed-0  # single seed
 """
 
 import argparse
 import json
 import os
+import sys
 import numpy as np
 import matplotlib.pyplot as plt
+
+sys.path.append('./common')
+from checkpoints import list_seed_dirs, plot_dir
 
 
 def load_metrics(path):
@@ -114,34 +118,21 @@ def plot_multi_seed(all_metrics, save_path):
 def main():
     parser = argparse.ArgumentParser(description="Plot training metrics")
     parser.add_argument("--checkpoint_dir", type=str, required=True,
-                        help="Path to checkpoint dir (single run) or parent dir (multi-seed)")
+                        help="Run directory (checkpoints/{task}/noise-{std}) or a single seed-* directory")
     args = parser.parse_args()
 
-    metrics_file = os.path.join(args.checkpoint_dir, "metrics.json")
-
-    if os.path.isfile(metrics_file):
-        # Single run
-        metrics = load_metrics(metrics_file)
-        save_path = os.path.join("plots", os.path.relpath(args.checkpoint_dir), "training_curves.png")
-        plot_single_run(metrics, save_path)
+    if os.path.isfile(os.path.join(args.checkpoint_dir, "metrics.json")):
+        run_dirs = [args.checkpoint_dir]
     else:
-        # Multi-seed: look for timestamp subdirs containing metrics.json
-        all_metrics = []
-        for subdir in sorted(os.listdir(args.checkpoint_dir)):
-            mf = os.path.join(args.checkpoint_dir, subdir, "metrics.json")
-            if os.path.isfile(mf):
-                all_metrics.append(load_metrics(mf))
+        run_dirs = list_seed_dirs(args.checkpoint_dir)
+    all_metrics = [load_metrics(os.path.join(d, "metrics.json")) for d in run_dirs]
 
-        if not all_metrics:
-            print(f"No metrics.json found in {args.checkpoint_dir}")
-            return
-
-        if len(all_metrics) == 1:
-            save_path = os.path.join("plots", os.path.relpath(args.checkpoint_dir), "training_curves.png")
-            plot_single_run(all_metrics[0], save_path)
-        else:
-            save_path = os.path.join("plots", os.path.relpath(args.checkpoint_dir), "training_curves.png")
-            plot_multi_seed(all_metrics, save_path)
+    save_path = os.path.join(plot_dir(args.checkpoint_dir), "training_curves.png")
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    if len(all_metrics) == 1:
+        plot_single_run(all_metrics[0], save_path)
+    else:
+        plot_multi_seed(all_metrics, save_path)
 
 
 if __name__ == "__main__":

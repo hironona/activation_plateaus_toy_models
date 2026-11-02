@@ -45,8 +45,8 @@ echo "CPU: $(nproc) cores available"
 echo "Memory: $(free -h | grep Mem)"
 echo ""
 
-# Run multi-seed training
-python train/train.py --config train/config.yaml --multi_seed
+# Train all seeds (see training.seed / training.n_seeds in the config)
+python train/train.py --config train/config.yaml
 
 EXIT_CODE=$?
 
