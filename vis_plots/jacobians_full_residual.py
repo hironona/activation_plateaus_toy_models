@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Full Residual Jacobian Analysis: Compute and plot ∂(layer_N resid_post) / ∂(layer_0 resid_post).
+Full Residual Jacobian Analysis: Compute and plot ∂(last block resid_post) / ∂(embedding) through all blocks.
 """
 
 import torch
@@ -16,31 +16,31 @@ config = load_config()
 N_STEPS = config['n_steps']
 
 
-def compute_jacobian_full_residual_toy(model, resid_post_layer0: torch.Tensor, device: str, activations: dict) -> torch.Tensor:
+def compute_jacobian_full_residual_toy(model, embed: torch.Tensor, device: str, activations: dict) -> torch.Tensor:
     """
-    Compute jacobian from layer 0 to last layer (toy ResNet): ∂(layer_N resid_post) / ∂(layer_0 resid_post).
-    layer_0 resid_post is the output of block 0, so the function is blocks 1, ..., N.
+    Compute jacobian from the embedding to the last block (toy ResNet): ∂(layer_{N-1} resid_post) / ∂(embed),
+    i.e. of the function blocks 0, ..., N-1.
     No sequence dimension.
 
     Args:
-        resid_post_layer0: [n_steps, hidden_dim]
+        embed: [n_steps, hidden_dim] embedding (layer -1 resid_post)
         activations: Dict with recorded activations for validation
 
     Returns:
         Jacobian: [n_steps, hidden_dim, hidden_dim]
     """
-    n_steps = resid_post_layer0.shape[0]
+    n_steps = embed.shape[0]
     n_layers = len(model.blocks)
     jacobians = []
 
     def forward_through_all_layers(resid):
         activation = resid.unsqueeze(0)
-        for layer_idx in range(1, n_layers):
+        for layer_idx in range(n_layers):
             activation = model.blocks[layer_idx](activation)
         return activation.squeeze(0)
 
     for step_idx in tqdm(range(n_steps), desc="Steps", leave=False):
-        resid = resid_post_layer0[step_idx].to(device)
+        resid = embed[step_idx].to(device)
         jac = torch.func.jacrev(forward_through_all_layers)(resid)
 
         # Validate against recorded activations
@@ -73,15 +73,15 @@ def compute_full_residual_norms_for_model(checkpoint_path, pairs_ids, layer_to_i
 
     for pair_ids in tqdm(pairs_ids, desc="Pairs", leave=False):
         activations = load_activations(checkpoint_path, layer_to_interpolate, pair_ids, n_steps)
-        resid_post_layer0 = activations['layer0_resid_post']
-        jacobians = compute_jacobian_full_residual_toy(model, resid_post_layer0, device, activations)
+        embed = activations['layer-1_resid_post']
+        jacobians = compute_jacobian_full_residual_toy(model, embed, device, activations)
 
         norms = torch.norm(jacobians.view(jacobians.shape[0], -1), dim=1)
 
         pair_key = f"{pair_ids[0]}_{pair_ids[1]}"
         jacobian_norms[pair_key] = norms
 
-        del jacobians, resid_post_layer0, activations
+        del jacobians, embed, activations
         torch.cuda.empty_cache()
 
     del model
@@ -97,6 +97,10 @@ def main():
     checkpoints = get_seed_checkpoints(config, args.checkpoint_dir)
     pairs_ids = get_pairs_ids(config)
     layer_to_interpolate = config['layer_to_interpolate']
+    # Activations are recorded from the interpolated layer on, so the embedding exists only for -2 (input) or -1
+    if layer_to_interpolate > -1:
+        raise ValueError(f"The embedding is not recorded when interpolating at layer {layer_to_interpolate}; "
+                         "set layer_to_interpolate to -2 (input) or -1 (embed) in vis_plots/config.yaml")
 
     all_seeds_data = []
     for idx, ckpt in enumerate(checkpoints):
@@ -107,7 +111,7 @@ def main():
     output_dir = pairs_plot_dir(get_checkpoint_dir(config, args.checkpoint_dir), pairs_ids)
     generate_interpolation_results_plot(
         data_dict=mean_data,
-        suptitle="Jacobian norm, block 0 → last block",
+        suptitle="Jacobian norm, embed → last block",
         ylabel="Frobenius norm",
         output_path=f"{output_dir}/jacobians_full_residual_norms.png",
         n_steps=N_STEPS,

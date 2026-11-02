@@ -83,7 +83,7 @@ python train/migrate_checkpoints.py --apply  # moves the directories
 │   ├── relative_distances_logits_plots.py     # Relative distances in logit space
 │   ├── spline_plots.py                        # Hamming distance of spline codes / step size
 │   ├── jacobians_layerwise.py                 # ∂(layer i+1) / ∂(layer i) norms
-│   ├── jacobians_full_residual.py             # ∂(last layer) / ∂(layer 0) norms
+│   ├── jacobians_full_residual.py             # ∂(last block) / ∂(embedding) norms
 │   ├── jacobians_mlp.py                       # ∂(mlp_out) / ∂(resid_pre) norms per block
 │   ├── utils.py           # Shared utilities (paths, metrics, seed aggregation, plotting)
 │   └── config.yaml        # Analysis config (checkpoint_dir, interpolation pairs, n_steps)
