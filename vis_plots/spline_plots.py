@@ -68,15 +68,16 @@ def main():
     output_dir = pairs_plot_dir(get_checkpoint_dir(config, args.checkpoint_dir), pairs_ids)
     generate_interpolation_results_plot(
         data_dict=mean_data,
-        suptitle="Normalized Hamming Distances of Spline Codes",
-        ylabel="Normalized Hamming Distance",
+        suptitle="Spline code changes per step",
+        ylabel="Hamming distance / step size",
         output_path=f"{output_dir}/spline_hamming_distances.png",
         n_steps=N_STEPS - 1,
         pairs_ids=pairs_ids,
         alpha_range=[0, 1],
         skip_interpolation_layer=False,
         std_dict=std_data,
-        y_floor=0
+        y_floor=0,
+        n_seeds=len(checkpoints),
     )
 
 if __name__ == "__main__":

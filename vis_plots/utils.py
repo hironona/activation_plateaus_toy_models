@@ -3,6 +3,7 @@
 Utility functions for the interpolation analyses of the toy ResNet.
 """
 
+import ast
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -13,6 +14,7 @@ from typing import List, Dict, Union
 import sys
 sys.path.append('./common')
 from checkpoints import find_seed_checkpoints, artifact_subdir, plot_dir
+from plot_style import layer_label, point_label, seeds_label
 
 
 def linear_interpolation(v0: torch.Tensor, v1: torch.Tensor, t: float) -> torch.Tensor:
@@ -174,7 +176,8 @@ def generate_interpolation_results_plot(
     alpha_range: List[float] = [0, 1],
     skip_interpolation_layer: bool = True,
     std_dict: Dict[str, Union[Dict[str, torch.Tensor], torch.Tensor]] = None,
-    y_floor: float = None
+    y_floor: float = None,
+    n_seeds: int = None,
 ) -> None:
     """
     Generate standardized interpolation results plot with two subplots.
@@ -190,6 +193,7 @@ def generate_interpolation_results_plot(
         pairs_ids: List of input pairs (one subplot each)
         alpha_range: Range for alpha values (default: [0, 1])
         skip_interpolation_layer: Whether to skip layer 0 (interpolation layer) in multi-layer plots
+        n_seeds: Number of seeds averaged over (appended to the title)
     """
     alphas = np.linspace(alpha_range[0], alpha_range[1], n_steps)
     fig, axes = plt.subplots(1, 2, figsize=(12, 6))
@@ -220,10 +224,9 @@ def generate_interpolation_results_plot(
                 # Extract layer number from key (e.g., "Layer 5" -> 5)
                 label = None
                 if j in legend_indices:
-                    if 'Layer' in layer_key:
-                        label = f"Layer {layer_key.split()[1]}"
-                    else:
-                        label = layer_key
+                    parts = layer_key.split()
+                    is_single_layer = len(parts) == 2 and parts[0] == 'Layer' and parts[1].lstrip('-').isdigit()
+                    label = layer_label(parts[1]) if is_single_layer else layer_key
 
                 ax.plot(alphas, layer_data, alpha=0.8, color=colors[j], linewidth=1, label=label)
                 if std_dict is not None:
@@ -259,16 +262,15 @@ def generate_interpolation_results_plot(
         # Reference lines and labels
         ax.axvline(x=0, color='gray', linestyle='--', alpha=0.8, linewidth=1.5)
         ax.axvline(x=1, color='gray', linestyle='--', alpha=0.8, linewidth=1.5)
-        ax.text(0, -0.06, f'"{pair_ids[0]}"', ha='center', va='top',
-               fontsize=10, color='gray', alpha=0.9, transform=ax.get_xaxis_transform())
-        ax.text(1, -0.06, f'"{pair_ids[1]}"', ha='center', va='top',
-               fontsize=10, color='gray', alpha=0.9, transform=ax.get_xaxis_transform())
+        for x, name in [(0, 'A'), (1, 'B')]:
+            ax.text(x, 1.01, name, ha='center', va='bottom', color='gray', transform=ax.get_xaxis_transform())
 
         # Formatting
-        ax.set_title(f'{pair_ids[0]} → {pair_ids[1]}', fontsize=14)
-        ax.set_xlabel('Interpolation α', fontsize=12)
+        point_a, point_b = (point_label(ast.literal_eval(p)) for p in pair_ids)
+        ax.set_title(f'A {point_a} → B {point_b}', pad=24)
+        ax.set_xlabel('Interpolation α')
         if i == 0:
-            ax.set_ylabel(ylabel, fontsize=12)
+            ax.set_ylabel(ylabel)
         else:
             ax.set_yticklabels([])
         ax.grid(True, alpha=0.3)
@@ -283,13 +285,15 @@ def generate_interpolation_results_plot(
     if has_multi_layer_data:
         handles, labels = axes[0].get_legend_handles_labels()
         if handles:
-            axes[0].legend(handles, labels, loc='upper left', fontsize=9)
+            axes[0].legend(handles, labels, loc='upper left')
 
-    plt.suptitle(suptitle, fontsize=16, fontweight='bold')
+    if n_seeds is not None:
+        suptitle += f' ({seeds_label(n_seeds)})'
+    plt.suptitle(suptitle)
     plt.tight_layout()
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.savefig(output_path)
     print(f"Plot saved to: {output_path}")
     plt.close()
 

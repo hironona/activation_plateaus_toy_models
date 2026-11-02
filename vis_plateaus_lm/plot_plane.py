@@ -23,7 +23,9 @@ from matplotlib.patches import Patch
 from scipy.ndimage import distance_transform_edt
 
 sys.path.append('./vis_plateaus_lm')
+sys.path.append('./common')
 from utils import load_config, construct_filepath, construct_plot_dir, SURFACES
+from plot_style import ANNOTATION_FONTSIZE
 
 # Sequential ramp (one hue, light -> dark) and categorical slots in fixed order
 SEQUENTIAL_BLUE = LinearSegmentedColormap.from_list('seq_blue', [
@@ -63,7 +65,7 @@ def draw_region_labels(ax, axis_u, axis_v, label_grid, label_strings, labels_to_
             continue
         dist = distance_transform_edt(np.pad(mask, 1))[1:-1, 1:-1]
         r, c = np.unravel_index(np.argmax(dist), dist.shape)
-        ax.text(axis_u[c], axis_v[r], repr(label_strings[label]), ha='center', va='center', fontsize=9, color=TEXT_PRIMARY,
+        ax.text(axis_u[c], axis_v[r], repr(label_strings[label]), ha='center', va='center', fontsize=ANNOTATION_FONTSIZE, color=TEXT_PRIMARY,
                 bbox=dict(boxstyle='round,pad=0.25', facecolor=SURFACE, edgecolor='none', alpha=0.85))
 
 
@@ -71,7 +73,7 @@ def draw_anchors(ax, anchor_coords, words):
     """Mark the three last-token activations (the input tokens, not predictions)."""
     ax.scatter(anchor_coords[:, 0], anchor_coords[:, 1], s=70, marker='o', facecolor=TEXT_PRIMARY, edgecolor=SURFACE, linewidth=2, zorder=5)
     for (u, v), word in zip(anchor_coords, words):
-        ax.annotate(f"“… {word}”", (u, v), xytext=(7, 7), textcoords='offset points', fontsize=10, fontweight='bold', color=TEXT_PRIMARY,
+        ax.annotate(f"“… {word}”", (u, v), xytext=(7, 7), textcoords='offset points', fontsize=ANNOTATION_FONTSIZE + 1, fontweight='bold', color=TEXT_PRIMARY,
                     path_effects=[pe.withStroke(linewidth=3, foreground=SURFACE)], zorder=6)
 
 
@@ -122,8 +124,8 @@ def plot_jacobian_heatmap(data, save_path, log_scale=True, labels_to_annotate=()
     cbar.set_label((r"$\log_{10}$ " if log_scale else "") + rf"$\|J\|_F$  (layer {data['source_layer_idx']} → logits)", color=TEXT_SECONDARY)
     cbar.ax.tick_params(colors=TEXT_SECONDARY, labelsize=8)
     cbar.outline.set_visible(False)
-    ax.set_title("Jacobian product norm, with argmax next-token boundaries", color=TEXT_PRIMARY, fontsize=12)
-    fig.suptitle(suptitle(data), color=TEXT_SECONDARY, fontsize=9)
+    ax.set_title("Jacobian norm to logits, with argmax-token boundaries", color=TEXT_PRIMARY)
+    fig.suptitle(suptitle(data), color=TEXT_SECONDARY, fontsize=12)
     fig.tight_layout()
     fig.savefig(save_path, dpi=200, facecolor=SURFACE)
     plt.close(fig)
@@ -156,9 +158,9 @@ def plot_label_map(data, save_path, shown_labels):
         n_other_tokens = len(np.setdiff1d(np.unique(label_grid), shown_labels))
         handles.append(Patch(facecolor=OTHER_COLOR, label=f"other ({n_other_tokens} token{'s' if n_other_tokens != 1 else ''}, {(class_grid == len(shown_labels)).sum() / n_total:.0%})"))
     ax.legend(handles=handles, title="argmax next token", loc='upper left', bbox_to_anchor=(1.02, 1), frameon=False,
-              fontsize=9, title_fontsize=9, labelcolor=TEXT_PRIMARY)
-    ax.set_title(f"Argmax next token on the {surface_noun(data)}", color=TEXT_PRIMARY, fontsize=12)
-    fig.suptitle(suptitle(data), color=TEXT_SECONDARY, fontsize=9)
+              labelcolor=TEXT_PRIMARY)
+    ax.set_title(f"Argmax next token on the {surface_noun(data)}", color=TEXT_PRIMARY)
+    fig.suptitle(suptitle(data), color=TEXT_SECONDARY, fontsize=12)
     fig.tight_layout()
     fig.savefig(save_path, dpi=200, facecolor=SURFACE, bbox_inches='tight')
     plt.close(fig)

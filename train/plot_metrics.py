@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 
 sys.path.append('./common')
 from checkpoints import list_seed_dirs, plot_dir
+import plot_style  # noqa: F401  (applies the shared style)
 
 
 def load_metrics(path):
@@ -25,7 +26,7 @@ def plot_single_run(metrics, save_path):
     epochs = np.arange(1, len(metrics['train_loss']) + 1)
     has_acc = 'train_acc' in metrics
 
-    fig, axes = plt.subplots(1, 2 if has_acc else 1, figsize=(12 if has_acc else 6, 4))
+    fig, axes = plt.subplots(1, 2 if has_acc else 1, figsize=(13 if has_acc else 6.5, 5))
     if not has_acc:
         axes = [axes]
 
@@ -52,7 +53,7 @@ def plot_single_run(metrics, save_path):
         ax.set_ylim(0, 1.05)
 
     plt.tight_layout()
-    plt.savefig(save_path, dpi=300)
+    plt.savefig(save_path)
     plt.close()
     print(f"Saved plot: {save_path}")
 
@@ -67,7 +68,7 @@ def plot_multi_seed(all_metrics, save_path):
     train_losses = np.array([m['train_loss'] for m in all_metrics])
     val_losses = np.array([m['val_loss'] for m in all_metrics])
 
-    fig, axes = plt.subplots(1, 2 if has_acc else 1, figsize=(12 if has_acc else 6, 4))
+    fig, axes = plt.subplots(1, 2 if has_acc else 1, figsize=(13 if has_acc else 6.5, 5))
     if not has_acc:
         axes = [axes]
 
@@ -110,7 +111,7 @@ def plot_multi_seed(all_metrics, save_path):
         ax.set_ylim(0, 1.05)
 
     plt.tight_layout()
-    plt.savefig(save_path, dpi=300)
+    plt.savefig(save_path)
     plt.close()
     print(f"Saved plot: {save_path}")
 

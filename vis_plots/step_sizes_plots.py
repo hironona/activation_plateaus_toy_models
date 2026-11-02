@@ -11,7 +11,7 @@ import torch
 import sys
 from typing import Dict
 sys.path.append('./vis_plots')
-from utils import load_config, load_activations, generate_interpolation_results_plot, get_seed_checkpoints, get_checkpoint_dir, get_pairs_ids, aggregate_metric_data, pairs_plot_dir
+from utils import load_config, load_activations, generate_interpolation_results_plot, get_seed_checkpoints, get_checkpoint_dir, get_pairs_ids, aggregate_metric_data, pairs_plot_dir, layer_label
 
 config = load_config()
 N_STEPS = config['n_steps']
@@ -58,14 +58,15 @@ def main():
     output_dir = pairs_plot_dir(get_checkpoint_dir(config, args.checkpoint_dir), pairs_ids)
     generate_interpolation_results_plot(
         data_dict=mean_data,
-        suptitle=f"Resid Post Step Sizes (Interpolated at Layer {layer_to_interpolate})",
-        ylabel="L2 Norm of Step Difference",
+        suptitle=f"Step size, interpolated at {layer_label(layer_to_interpolate)}",
+        ylabel="Step size (L2)",
         output_path=f"{output_dir}/step_sizes_resid_post_layer{layer_to_interpolate}_interpolation.png",
         n_steps=N_STEPS - 1,
         pairs_ids=pairs_ids,
         alpha_range=[0, 1],
         std_dict=std_data,
-        y_floor=0
+        y_floor=0,
+        n_seeds=len(checkpoints),
     )
 
 

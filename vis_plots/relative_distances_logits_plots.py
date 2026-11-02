@@ -9,7 +9,7 @@ import argparse
 import torch
 import sys
 sys.path.append('./vis_plots')
-from utils import load_activations, load_config, compute_relative_distances, generate_interpolation_results_plot, get_seed_checkpoints, get_checkpoint_dir, get_pairs_ids, aggregate_metric_data, pairs_plot_dir
+from utils import load_activations, load_config, compute_relative_distances, generate_interpolation_results_plot, get_seed_checkpoints, get_checkpoint_dir, get_pairs_ids, aggregate_metric_data, pairs_plot_dir, layer_label
 
 config = load_config()
 N_STEPS = config['n_steps']
@@ -40,14 +40,15 @@ def main():
     output_dir = pairs_plot_dir(get_checkpoint_dir(config, args.checkpoint_dir), pairs_ids)
     generate_interpolation_results_plot(
         data_dict=mean_data,
-        suptitle=f"Logits Relative Distances, Interpolated at Layer {layer_to_interpolate}",
-        ylabel="Relative Distance to A (0) vs B (1)",
+        suptitle=f"Logits, interpolated at {layer_label(layer_to_interpolate)}",
+        ylabel="Relative distance (A=0, B=1)",
         output_path=f"{output_dir}/relative_distances_logits_layer{layer_to_interpolate}_interpolation.png",
         n_steps=N_STEPS,
         pairs_ids=pairs_ids,
         alpha_range=[0, 1],
         skip_interpolation_layer=False,
-        std_dict=std_data
+        std_dict=std_data,
+        n_seeds=len(checkpoints),
     )
 
     print("\n=== Complete ===")

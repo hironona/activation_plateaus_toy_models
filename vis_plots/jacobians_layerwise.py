@@ -124,7 +124,7 @@ def compute_layerwise_data_for_model(checkpoint_path, pairs_ids, layer_to_interp
 
     Returns:
         (layerwise_norms_data, product_norms_data)
-        layerwise_norms_data: {pair_key: {f"Layer {i}→{i+1}": tensor}} — multi-layer format
+        layerwise_norms_data: {pair_key: {f"block {i} → {i+1}": tensor}} — multi-layer format
         product_norms_data: {pair_key: tensor} — single-line format
     """
     model, _, _ = load_model_from_checkpoint(checkpoint_path)
@@ -149,7 +149,7 @@ def compute_layerwise_data_for_model(checkpoint_path, pairs_ids, layer_to_interp
         input_data = activations.get('layer-2_resid_post')
         if input_data is not None:
             embed_jac = compute_jacobian_embed_toy(model, input_data, device)
-            layer_norms["Input→Embed"] = torch.norm(embed_jac.view(embed_jac.shape[0], -1), dim=1)
+            layer_norms["input → embed"] = torch.norm(embed_jac.view(embed_jac.shape[0], -1), dim=1)
 
         # --- Hidden layer Jacobians ---
         for layer_idx in tqdm(range(0, n_layers - 1), desc=f"Layerwise Jacobians {pair_key}", leave=False):
@@ -158,7 +158,7 @@ def compute_layerwise_data_for_model(checkpoint_path, pairs_ids, layer_to_interp
             jacobians = compute_jacobian_layerwise_toy(model, resid_post, layer_idx, device, activations)
 
             norms = torch.norm(jacobians.view(jacobians.shape[0], -1), dim=1)
-            layer_norms[f"Layer {layer_idx}→{layer_idx+1}"] = norms
+            layer_norms[f"block {layer_idx} → {layer_idx+1}"] = norms
             jacs_list.append(jacobians)
 
             del resid_post
@@ -169,7 +169,7 @@ def compute_layerwise_data_for_model(checkpoint_path, pairs_ids, layer_to_interp
         last_block_data = activations.get(f'layer{n_layers - 1}_resid_post')
         if last_block_data is not None:
             unembed_jac = compute_jacobian_unembed_toy(model, last_block_data, device)
-            layer_norms["LastBlock→Logits"] = torch.norm(unembed_jac.view(unembed_jac.shape[0], -1), dim=1)
+            layer_norms["last block → logits"] = torch.norm(unembed_jac.view(unembed_jac.shape[0], -1), dim=1)
 
         layerwise_norms_data[pair_key] = layer_norms
 
@@ -221,25 +221,27 @@ def main():
     output_dir = pairs_plot_dir(get_checkpoint_dir(config, args.checkpoint_dir), pairs_ids)
     generate_interpolation_results_plot(
         data_dict=mean_lw,
-        suptitle="Jacobian Norms: Layerwise Residual (Layer i → Layer i+1)",
-        ylabel="Frobenius Norm",
+        suptitle="Jacobian norm per layer",
+        ylabel="Frobenius norm",
         output_path=f"{output_dir}/jacobians_layerwise_norms.png",
         n_steps=N_STEPS,
         pairs_ids=pairs_ids,
         skip_interpolation_layer=False,
         std_dict=std_lw,
-        y_floor=0
+        y_floor=0,
+        n_seeds=len(checkpoints),
     )
 
     generate_interpolation_results_plot(
         data_dict=mean_prod,
-        suptitle="Jacobian Products: Layerwise Residual (Full Chain)",
-        ylabel="Frobenius Norm",
+        suptitle="Jacobian norm, input → logits (layerwise product)",
+        ylabel="Frobenius norm",
         output_path=f"{output_dir}/jacobians_layerwise_product.png",
         n_steps=N_STEPS,
         pairs_ids=pairs_ids,
         std_dict=std_prod,
-        y_floor=0
+        y_floor=0,
+        n_seeds=len(checkpoints),
     )
 
     print("\n=== Complete ===")

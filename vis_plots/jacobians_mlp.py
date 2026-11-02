@@ -137,25 +137,27 @@ def main():
     output_dir = pairs_plot_dir(get_checkpoint_dir(config, args.checkpoint_dir), pairs_ids)
     generate_interpolation_results_plot(
         data_dict=mean_lw,
-        suptitle="Jacobian Norms: MLP (∂mlp_out / ∂resid_pre)",
-        ylabel="Frobenius Norm",
+        suptitle="MLP Jacobian norm per block",
+        ylabel="Frobenius norm",
         output_path=f"{output_dir}/jacobians_mlp_norms.png",
         n_steps=N_STEPS,
         pairs_ids=pairs_ids,
         skip_interpolation_layer=False,
         std_dict=std_lw,
-        y_floor=0
+        y_floor=0,
+        n_seeds=len(checkpoints),
     )
 
     generate_interpolation_results_plot(
         data_dict=mean_prod,
-        suptitle="Jacobian Products: MLP (Full Chain)",
-        ylabel="Frobenius Norm",
+        suptitle="MLP Jacobian norm (product over blocks)",
+        ylabel="Frobenius norm",
         output_path=f"{output_dir}/jacobians_mlp_product.png",
         n_steps=N_STEPS,
         pairs_ids=pairs_ids,
         std_dict=std_prod,
-        y_floor=0
+        y_floor=0,
+        n_seeds=len(checkpoints),
     )
 
     print("\n=== Complete ===")

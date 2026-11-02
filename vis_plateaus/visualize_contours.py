@@ -24,7 +24,7 @@ import math
 
 import sys
 sys.path.append('./train')
-from utils import load_config, resolve_layer_idx, find_seed_checkpoints, load_model_from_checkpoint, plot_dir
+from utils import load_config, resolve_layer_idx, find_seed_checkpoints, load_model_from_checkpoint, plot_dir, ANNOTATION_FONTSIZE, layer_label, point_label, seeds_label
 from visualize_plateaus import collect_activations_resid_post, generate_uniform_data
 
 SUB_REF_COLOR = '#CD5C5C'  # indianred (muted red)
@@ -171,10 +171,9 @@ def _draw_reference_annotations(ax, ref_source_act, sub_ref_source_acts,
 
     # Reference coordinate label
     if reference_point is not None and not is_3d:
-        coord_str = f"[{reference_point[0]:.2f}, {reference_point[1]:.2f}]"
-        ax.annotate(coord_str, (ref_pos[0], ref_pos[1]),
+        ax.annotate(point_label(reference_point), (ref_pos[0], ref_pos[1]),
                     textcoords='offset points', xytext=(8, 8),
-                    fontsize=7, color='red', fontweight='bold',
+                    fontsize=ANNOTATION_FONTSIZE, color='red', fontweight='bold',
                     bbox=dict(boxstyle='round,pad=0.2', fc='white', alpha=0.7,
                               edgecolor='none'),
                     zorder=6)
@@ -210,10 +209,9 @@ def _draw_reference_annotations(ax, ref_source_act, sub_ref_source_acts,
                        edgecolors='darkred', linewidths=1)
 
             # Coordinate label
-            coord_str = f"[{sub_input[0]:.2f}, {sub_input[1]:.2f}]"
-            ax.annotate(coord_str, (sp[0], sp[1]),
-                        textcoords='offset points', xytext=(8, -12),
-                        fontsize=7, color=SUB_REF_COLOR, fontweight='bold',
+            ax.annotate(point_label(sub_input), (sp[0], sp[1]),
+                        textcoords='offset points', xytext=(8, -16),
+                        fontsize=ANNOTATION_FONTSIZE, color=SUB_REF_COLOR, fontweight='bold',
                         bbox=dict(boxstyle='round,pad=0.2', fc='white', alpha=0.7,
                                   edgecolor='none'),
                         zorder=6)
@@ -279,13 +277,13 @@ def visualize_open_ball_preimage(
                          alpha=0.75, zorder=2, extend='both')
         cs = ax.contour(X, Y, Z, levels=levels, colors='k', linewidths=0.7,
                         alpha=0.6, zorder=3)
-        ax.clabel(cs, inline=True, fontsize=6, fmt='%.3g')
+        ax.clabel(cs, inline=True, fontsize=ANNOTATION_FONTSIZE - 2, fmt='%.3g')
 
-        plt.colorbar(cf, ax=ax, label='L2 distance in target space',
+        plt.colorbar(cf, ax=ax, label='L2 distance to x*',
                      shrink=1.0, pad=0.02)
 
-        ax.set_xlabel('Input Dim 1')
-        ax.set_ylabel('Input Dim 2')
+        ax.set_xlabel('x₁')
+        ax.set_ylabel('x₂')
         ax.set_xlim(-radius, radius)
         ax.set_ylim(-radius, radius)
 
@@ -302,13 +300,13 @@ def visualize_open_ball_preimage(
                             alpha=0.75, zorder=2, extend='both')
         cs = ax.tricontour(triang, vals, levels=levels, colors='k',
                            linewidths=0.7, alpha=0.6, zorder=3)
-        ax.clabel(cs, inline=True, fontsize=6, fmt='%.3g')
+        ax.clabel(cs, inline=True, fontsize=ANNOTATION_FONTSIZE - 2, fmt='%.3g')
 
-        plt.colorbar(cf, ax=ax, label='L2 distance in target space',
+        plt.colorbar(cf, ax=ax, label='L2 distance to x*',
                      shrink=1.0, pad=0.02)
 
-        ax.set_xlabel('Dim 1')
-        ax.set_ylabel('Dim 2')
+        ax.set_xlabel('dim 1')
+        ax.set_ylabel('dim 2')
 
     # =========================================================
     # PATH 3: PCA projection
@@ -331,9 +329,9 @@ def visualize_open_ball_preimage(
                                 alpha=0.75, zorder=2, extend='both')
             cs = ax.tricontour(triang, vals, levels=levels, colors='k',
                                linewidths=0.7, alpha=0.6, zorder=3)
-            ax.clabel(cs, inline=True, fontsize=6, fmt='%.3g')
+            ax.clabel(cs, inline=True, fontsize=ANNOTATION_FONTSIZE - 2, fmt='%.3g')
 
-            plt.colorbar(cf, ax=ax, label='L2 distance in target space',
+            plt.colorbar(cf, ax=ax, label='L2 distance to x*',
                          shrink=1.0, pad=0.02)
 
         else:
@@ -345,7 +343,7 @@ def visualize_open_ball_preimage(
                                  c=vals, cmap='Blues_r', norm=norm,
                                  s=10, alpha=0.7, zorder=2, edgecolors='none')
 
-            plt.colorbar(scatter, ax=ax, label='L2 distance in target space',
+            plt.colorbar(scatter, ax=ax, label='L2 distance to x*',
                          shrink=0.7, pad=0.1)
 
             ax.set_zlabel('PC 3')
@@ -363,12 +361,12 @@ def visualize_open_ball_preimage(
     )
 
     # --- Common ---
-    ax.set_title(title, fontsize=11)
+    ax.set_title(title)
     ax.grid(True, linestyle='--', alpha=0.3)
     plt.tight_layout()
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.savefig(output_path)
     print(f"Plot saved to: {output_path}")
     plt.close()
 
@@ -407,9 +405,6 @@ def main():
     data = generate_uniform_data(N_POINTS, RADIUS)
     grid_size = int(math.sqrt(N_POINTS))
 
-    src_label = 'input' if source_layer_idx == -2 else f"layer {SOURCE_LAYER_IDX_RAW}"
-    tgt_label = TARGET_LAYER_IDX_RAW
-
     print(f"{len(model_paths)} seed checkpoint(s)")
     all_l2 = []
     first_result = None
@@ -430,12 +425,8 @@ def main():
     ref_source_act     = first_result['ref_source_act']
     sub_ref_source_acts = first_result['sub_ref_source_acts']
 
-    title = (
-        f"Pre-image of Open Balls (mean over {n_seeds} seeds)\n"
-        f"Source: {src_label}, Target: {tgt_label} | "
-        f"Ref: {REFERENCE_POINT.tolist()} | "
-        f"Spacing: {LEVEL_SPACING}"
-    )
+    title = (f"Distance to x* at {layer_label(target_layer_idx)}, "
+             f"drawn in {layer_label(source_layer_idx)} space ({seeds_label(n_seeds)})")
 
     print(f"L2 distance range: [{l2_distances.min():.4f}, {l2_distances.max():.4f}]")
 

@@ -9,6 +9,7 @@ from typing import Dict, Union
 import sys
 sys.path.append('./common')
 from checkpoints import find_seed_checkpoints, load_model_from_checkpoint, plot_dir
+from plot_style import ANNOTATION_FONTSIZE, METRIC_LABELS, layer_label, point_label, seeds_label
 
 # Named layers accepted for source_layer_idx / target_layer_idx in the configs
 LAYER_NAME_TO_IDX = {

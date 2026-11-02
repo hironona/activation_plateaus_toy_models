@@ -15,7 +15,7 @@ import math
 
 import sys
 sys.path.append('./train')
-from utils import load_config, find_seed_checkpoints, load_model_from_checkpoint, plot_dir
+from utils import load_config, find_seed_checkpoints, load_model_from_checkpoint, plot_dir, seeds_label
 from visualize_plateaus import generate_uniform_data
 from visualize_contours import _draw_reference_annotations
 
@@ -89,10 +89,8 @@ def visualize_kl_heatmap(
 
     mesh = ax.pcolormesh(x_coords, y_coords, Z, cmap='viridis', norm=norm,
                          shading='nearest', zorder=2)
-    cbar_label = 'KL(p(y|x*) || p(y|x))'
-    if log_scale:
-        cbar_label += f' (clipped at {kl_floor:.0e})'
-    plt.colorbar(mesh, ax=ax, label=cbar_label, shrink=1.0, pad=0.02)
+    # Values below kl_floor are clipped to it on the log scale
+    plt.colorbar(mesh, ax=ax, label='KL(p(y|x*) ‖ p(y|x))', shrink=1.0, pad=0.02)
 
     # In input space, source coordinates are the input coordinates themselves
     _draw_reference_annotations(
@@ -100,16 +98,16 @@ def visualize_kl_heatmap(
         reference_point, sub_reference_points,
     )
 
-    ax.set_xlabel('Input Dim 1')
-    ax.set_ylabel('Input Dim 2')
+    ax.set_xlabel('x₁')
+    ax.set_ylabel('x₂')
     ax.set_xlim(-radius, radius)
     ax.set_ylim(-radius, radius)
     ax.set_aspect('equal')
-    ax.set_title(title, fontsize=11)
+    ax.set_title(title)
     plt.tight_layout()
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.savefig(output_path)
     print(f"Plot saved to: {output_path}")
     plt.close()
 
@@ -151,11 +149,7 @@ def main():
 
     print(f"KL range: [{kl.min():.4g}, {kl.max():.4g}]")
 
-    title = (
-        f"KL Divergence of Class Probabilities (mean over {len(model_paths)} seeds)\n"
-        f"Ref x*: {REFERENCE_POINT.tolist()} | "
-        f"Scale: {'log' if LOG_SCALE else 'linear'}"
-    )
+    title = f"KL divergence of class probabilities ({seeds_label(len(model_paths))})"
     output_path = (f"{plot_dir(checkpoint_dir)}/kl/"
                    f"kl_ref_{REFERENCE_POINT.tolist()}_{'log' if LOG_SCALE else 'linear'}.png")
 

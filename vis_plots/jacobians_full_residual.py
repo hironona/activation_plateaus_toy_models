@@ -97,13 +97,14 @@ def main():
     output_dir = pairs_plot_dir(get_checkpoint_dir(config, args.checkpoint_dir), pairs_ids)
     generate_interpolation_results_plot(
         data_dict=mean_data,
-        suptitle="Jacobian Norms: Full Residual Stream (Layer 0 → Last Layer)",
-        ylabel="Frobenius Norm",
+        suptitle="Jacobian norm, block 0 → last block",
+        ylabel="Frobenius norm",
         output_path=f"{output_dir}/jacobians_full_residual_norms.png",
         n_steps=N_STEPS,
         pairs_ids=pairs_ids,
         std_dict=std_data,
-        y_floor=0
+        y_floor=0,
+        n_seeds=len(checkpoints),
     )
 
     print("\n=== Complete ===")

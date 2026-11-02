@@ -16,7 +16,7 @@ import math
 
 import sys
 sys.path.append('./train')
-from utils import load_config, resolve_layer_idx, find_seed_checkpoints, load_model_from_checkpoint, plot_dir
+from utils import load_config, resolve_layer_idx, find_seed_checkpoints, load_model_from_checkpoint, plot_dir, METRIC_LABELS, layer_label, seeds_label
 from compute_metrics import l2_norm_metric, jacobian_determinant_metric, jacobian_determinant_layerwise_prod_metric, jacobian_norm_metric, jacobian_norm_layerwise_prod_metric
 from model import ResNetMLP
 from data import ToyDataset
@@ -107,7 +107,7 @@ def generate_uniform_data(n_points: int, radius: float) -> torch.Tensor:
 def visualize_plateau(
     source_activations: torch.Tensor,
     metric_values: torch.Tensor,
-    metric_name: str,
+    metric_label: str,
     title: str,
     output_path: str,
     n_pca_components: int = 3,
@@ -116,6 +116,7 @@ def visualize_plateau(
     source_layer_idx: int = None,
     device: str = 'cpu',
     task_config: dict = None,
+    mark_reference: bool = False,
 ):
     """
     Create a scatter plot of data points in source-layer space, colored by metric value,
@@ -125,7 +126,7 @@ def visualize_plateau(
     Args:
         source_activations: (n_points, d_source) — activations at source layer for sampled points.
         metric_values: (n_points,) — computed metric value per point.
-        metric_name: Label for the colorbar.
+        metric_label: Label for the colorbar.
         title: Plot title.
         output_path: Where to save the plot.
         n_pca_components: Number of PCA components to reduce to (2 or 3).
@@ -134,6 +135,7 @@ def visualize_plateau(
         source_layer_idx: Source layer index for transforming background data.
         device: Device string.
         task_config: Task config dict from checkpoint (keys: name, num_classes, noise_std, distribution, etc.).
+        mark_reference: Whether to mark the reference point.
     """
     d_source = source_activations.shape[1]
     use_pca = d_source > n_pca_components
@@ -229,10 +231,10 @@ def visualize_plateau(
     else:
         scatter = ax.scatter(src_np[:, 0], src_np[:, 1], c=vals, cmap='coolwarm',
                              s=10, alpha=0.7, zorder=2, edgecolors='none')
-    plt.colorbar(scatter, ax=ax, label=metric_name, shrink=0.7 if use_3d else 1.0, pad=0.1)
+    plt.colorbar(scatter, ax=ax, label=metric_label, shrink=0.7 if use_3d else 1.0, pad=0.1)
 
     # --- Mark reference point ---
-    if reference_point_source_act is not None and metric_name == 'l2_norm':
+    if reference_point_source_act is not None and mark_reference:
         ref = reference_point_source_act.numpy()
         if ref.ndim == 1:
             ref = ref.reshape(1, -1)
@@ -246,17 +248,20 @@ def visualize_plateau(
             ax.scatter(ref[0], ref[1], c='black', marker='x', s=100, zorder=3, linewidths=2)
 
     # --- Labels and Limits ---
-    ax.set_title(title, fontsize=12)
+    ax.set_title(title)
     if use_pca:
         ax.set_xlabel('PC 1')
         ax.set_ylabel('PC 2')
         if use_3d:
             ax.set_zlabel('PC 3')
+    elif source_layer_idx == -2:
+        ax.set_xlabel('x₁')
+        ax.set_ylabel('x₂')
     else:
-        ax.set_xlabel('Dim 1')
-        ax.set_ylabel('Dim 2')
+        ax.set_xlabel('dim 1')
+        ax.set_ylabel('dim 2')
         if use_3d:
-            ax.set_zlabel('Dim 3')
+            ax.set_zlabel('dim 3')
     
     if d_source == 2: # If the source space is 2D, assume it is the input space.
         ax.set_ylim(-1, 1)
@@ -267,14 +272,13 @@ def visualize_plateau(
     # --- Class legend (discrete, inside plot) ---
     if bg_legend_handles:
         ax.legend(handles=bg_legend_handles, title='Training data',
-                  loc='lower right',
-                  fontsize=8, title_fontsize=9, framealpha=0.8)
+                  loc='lower right', framealpha=0.8)
 
     ax.grid(True, linestyle='--', alpha=0.3)
     plt.tight_layout()
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.savefig(output_path)
     print(f"Plot saved to: {output_path}")
     plt.close()
 
@@ -407,25 +411,23 @@ def main():
     task_config = first_seed_result['task_config']
     model = first_seed_result['model']
 
-    # Title
-    target_label = TARGET_LAYER_IDX_RAW if target_is_logits else f"layer {TARGET_LAYER_IDX_RAW}"
-    source_label = SOURCE_LAYER_IDX_RAW if isinstance(SOURCE_LAYER_IDX_RAW, str) else f"layer {SOURCE_LAYER_IDX_RAW}"
-    title = f"Plateau Visualization: {METRIC} (mean over {n_seeds} seeds, log scale: {LOG_SCALE})\nSource: {source_label}, Target: {target_label}"
-    if METRIC == 'l2_norm' and 'predicted_class' in first_seed_result:
-        title += f"\nRef point {REFERENCE_POINT.tolist()} — predicted class: {first_seed_result['predicted_class']}"
+    title = f"{layer_label(source_layer_idx)} → {layer_label(target_layer_idx)} ({seeds_label(n_seeds)})"
+    if 'predicted_class' in first_seed_result:
+        print(f"Reference point {REFERENCE_POINT.tolist()}: predicted class {first_seed_result['predicted_class']}")
 
     output_path = f"{plot_dir(checkpoint_dir)}/plateaus/{METRIC}_src-{SOURCE_LAYER_IDX_RAW}_tgt-{TARGET_LAYER_IDX_RAW}.png"
 
+    metric_label = METRIC_LABELS[METRIC]
     if LOG_SCALE:
         metric_values = torch.log(metric_values + 1e-8)  # Add small constant to avoid log(0)
-        METRIC += " (log scale)"
+        metric_label = f"log {metric_label}"
 
     print(f"Loaded model on {device} (task config: {task_config})")
 
     visualize_plateau(
         source_activations=source_activations,
         metric_values=metric_values,
-        metric_name=METRIC,
+        metric_label=metric_label,
         title=title,
         output_path=output_path,
         n_pca_components=N_PCA_COMPONENTS,
@@ -434,6 +436,7 @@ def main():
         source_layer_idx=source_layer_idx,
         device=device,
         task_config=task_config,
+        mark_reference=(METRIC == 'l2_norm'),
     )
 
     print("\n=== Complete ===")

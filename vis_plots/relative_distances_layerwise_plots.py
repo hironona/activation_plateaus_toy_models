@@ -12,7 +12,7 @@ import argparse
 import torch
 import sys
 sys.path.append('./vis_plots')
-from utils import load_activations, load_config, get_n_layers, compute_relative_distances, generate_interpolation_results_plot, get_seed_checkpoints, get_checkpoint_dir, get_pairs_ids, aggregate_metric_data, pairs_plot_dir
+from utils import load_activations, load_config, get_n_layers, compute_relative_distances, generate_interpolation_results_plot, get_seed_checkpoints, get_checkpoint_dir, get_pairs_ids, aggregate_metric_data, pairs_plot_dir, layer_label
 
 config = load_config()
 N_STEPS = config['n_steps']
@@ -33,18 +33,19 @@ def variant1_compute(pairs_ids, checkpoint_path, layer_to_interpolate):
     return plot_data
 
 
-def variant1_plot(plot_data, pairs_ids, output_dir, layer_to_interpolate, std_dict=None):
+def variant1_plot(plot_data, pairs_ids, output_dir, layer_to_interpolate, std_dict=None, n_seeds=None):
     """Variant 1: Plot - Interpolate in layer 0, record in all subsequent layers."""
     generate_interpolation_results_plot(
         data_dict=plot_data,
-        suptitle=f"Relative Distances (Interpolate in Layer {layer_to_interpolate})",
-        ylabel="Relative Distance to Token A (0) vs Token B (1)",
+        suptitle=f"Interpolated at {layer_label(layer_to_interpolate)}",
+        ylabel="Relative distance (A=0, B=1)",
         output_path=f"{output_dir}/relative_distances_layerwise_layer{layer_to_interpolate}_interpolation.png",
         n_steps=N_STEPS,
         pairs_ids=pairs_ids,
         alpha_range=[0, 1],
         skip_interpolation_layer=True,
-        std_dict=std_dict
+        std_dict=std_dict,
+        n_seeds=n_seeds,
     )
 
 
@@ -63,18 +64,19 @@ def variant2_compute(n_layers, pairs_ids, checkpoint_path):
     return plot_data
 
 
-def variant2_plot(plot_data, pairs_ids, output_dir, std_dict=None):
+def variant2_plot(plot_data, pairs_ids, output_dir, std_dict=None, n_seeds=None):
     """Variant 2: Plot - Interpolate in each layer, record in last layer only."""
     generate_interpolation_results_plot(
         data_dict=plot_data,
-        suptitle="Relative Distances (Record in Last Layer)",
-        ylabel="Relative Distance to Token A (0) vs Token B (1)",
+        suptitle="Interpolated at block i, recorded at last block",
+        ylabel="Relative distance (A=0, B=1)",
         output_path=f"{output_dir}/relative_distances_layerwise_last_layer_recording.png",
         n_steps=N_STEPS,
         pairs_ids=pairs_ids,
         alpha_range=[0, 1],
         skip_interpolation_layer=True,
-        std_dict=std_dict
+        std_dict=std_dict,
+        n_seeds=n_seeds,
     )
 
 
@@ -93,18 +95,19 @@ def variant3_compute(n_layers, pairs_ids, checkpoint_path, N):
     return plot_data
 
 
-def variant3_plot(plot_data, pairs_ids, output_dir, N, std_dict=None):
+def variant3_plot(plot_data, pairs_ids, output_dir, N, std_dict=None, n_seeds=None):
     """Variant 3: Plot - Interpolate in layer i, record in layer i+N."""
     generate_interpolation_results_plot(
         data_dict=plot_data,
-        suptitle=f"Relative Distances (N={N})",
-        ylabel="Relative Distance to Token A (0) vs Token B (1)",
+        suptitle=f"Interpolated at block i, recorded at block i+{N}",
+        ylabel="Relative distance (A=0, B=1)",
         output_path=f"{output_dir}/relative_distances_layerwise_N{N}.png",
         n_steps=N_STEPS,
         pairs_ids=pairs_ids,
         alpha_range=[0, 1],
         skip_interpolation_layer=True,
-        std_dict=std_dict
+        std_dict=std_dict,
+        n_seeds=n_seeds,
     )
 
 
@@ -123,17 +126,18 @@ def single_layer_compute(pairs_ids, checkpoint_path, layer_to_interpolate, targe
     return filtered
 
 
-def single_layer_plot(plot_data, pairs_ids, output_dir, layer_to_interpolate, target_layer, std_dict=None):
+def single_layer_plot(plot_data, pairs_ids, output_dir, layer_to_interpolate, target_layer, std_dict=None, n_seeds=None):
     """Plot relative distances for a single target layer."""
     generate_interpolation_results_plot(
         data_dict=plot_data,
-        suptitle=f"Relative Distances — Layer {target_layer} (Interpolate in Layer {layer_to_interpolate})",
-        ylabel="Relative Distance to Token A (0) vs Token B (1)",
+        suptitle=f"Recorded at {layer_label(target_layer)}, interpolated at {layer_label(layer_to_interpolate)}",
+        ylabel="Relative distance (A=0, B=1)",
         output_path=f"{output_dir}/relative_distances_layer{target_layer}_interpolate{layer_to_interpolate}.png",
         n_steps=N_STEPS,
         pairs_ids=pairs_ids,
         alpha_range=[0, 1],
-        std_dict=std_dict
+        std_dict=std_dict,
+        n_seeds=n_seeds,
     )
 
 
@@ -153,7 +157,7 @@ def main():
         print(f"\nSingle layer mode: Layer {args.single_layer}, interpolate in layer {layer_to_interpolate}")
         all_sl = [single_layer_compute(pairs_ids, ckpt, layer_to_interpolate, args.single_layer) for ckpt in checkpoints]
         mean_sl, std_sl = aggregate_metric_data(all_sl)
-        single_layer_plot(mean_sl, pairs_ids, output_dir, layer_to_interpolate, args.single_layer, std_dict=std_sl)
+        single_layer_plot(mean_sl, pairs_ids, output_dir, layer_to_interpolate, args.single_layer, std_dict=std_sl, n_seeds=len(checkpoints))
         print("\n=== Complete ===")
         return
 
@@ -161,7 +165,7 @@ def main():
     print(f"\nVariant 1: Interpolate in layer {layer_to_interpolate}, record in all layers")
     all_v1 = [variant1_compute(pairs_ids, ckpt, layer_to_interpolate) for ckpt in checkpoints]
     mean_v1, std_v1 = aggregate_metric_data(all_v1)
-    variant1_plot(mean_v1, pairs_ids, output_dir, layer_to_interpolate, std_dict=std_v1)
+    variant1_plot(mean_v1, pairs_ids, output_dir, layer_to_interpolate, std_dict=std_v1, n_seeds=len(checkpoints))
 
     if not args.interpolate_only_first_layer:
         n_layers = get_n_layers(load_activations(checkpoints[0], layer_to_interpolate, pairs_ids[0], N_STEPS))
@@ -170,7 +174,7 @@ def main():
         print("\nVariant 2: Interpolate in each layer, record in last layer")
         all_v2 = [variant2_compute(n_layers, pairs_ids, ckpt) for ckpt in checkpoints]
         mean_v2, std_v2 = aggregate_metric_data(all_v2)
-        variant2_plot(mean_v2, pairs_ids, output_dir, std_dict=std_v2)
+        variant2_plot(mean_v2, pairs_ids, output_dir, std_dict=std_v2, n_seeds=len(checkpoints))
 
         # Variant 3
         print("\nVariant 3: Interpolate in layer i, record in layer i+N")
@@ -178,7 +182,7 @@ def main():
             print(f"  Processing N={N}...")
             all_v3 = [variant3_compute(n_layers, pairs_ids, ckpt, N) for ckpt in checkpoints]
             mean_v3, std_v3 = aggregate_metric_data(all_v3)
-            variant3_plot(mean_v3, pairs_ids, output_dir, N, std_dict=std_v3)
+            variant3_plot(mean_v3, pairs_ids, output_dir, N, std_dict=std_v3, n_seeds=len(checkpoints))
 
     print("\n=== Complete ===")
 
