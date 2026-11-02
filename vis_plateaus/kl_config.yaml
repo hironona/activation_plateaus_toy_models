@@ -1,0 +1,18 @@
+n_points: 10000  # Number of grid points (sqrt(n_points) per input dim)
+radius: 1.0      # Grid spans [-radius, radius]^2 in input space
+
+# x^*: each grid point x is colored by KL(p(y|x^*) || p(y|x)) on the final class probabilities
+reference_point: [0.25, 0.0]
+
+# Sub-reference points to visualize alongside the main reference point.
+# Draws circles, dashed lines to reference, and coordinate labels.
+# Set to null to disable. Options: [null, [[x1, y1], [x2, y2], ...]]
+sub_reference_points:
+  - [0.0, -0.125]
+  - [0.5, -0.125]
+
+log_scale: True     # Whether to use log scale for the KL values when coloring the grid
+kl_floor: 1.0e-8    # With log_scale, KL values below this are clipped to it (KL is 0 at the reference point)
+
+model_names:
+  toy_resnet: "checkpoints/class_spiral/ResNetMLP/noise-0.00-multi_seed_5_runs"

@@ -66,10 +66,12 @@ All scripts must be run from the project root.
 ├── vis_plateaus/           # Direct plateau geometry visualization (toy ResNet only)
 │   ├── visualize_plateaus.py  # Scatter plot colored by metric (L2, Jacobian norm/det)
 │   ├── visualize_contours.py  # Contour plot of open-ball pre-images in source space
+│   ├── visualize_kl.py        # Heatmap of KL(p(y|x*) || p(y|x)) over the input grid
 │   ├── compute_metrics.py     # Jacobian computation (full, layerwise, to-logits, input-to-embed)
 │   ├── utils.py               # Shared utilities for this pipeline
 │   ├── config.yaml            # Plateau vis settings
-│   └── contour_config.yaml   # Contour vis settings (levels, spacing, sub-reference points)
+│   ├── contour_config.yaml   # Contour vis settings (levels, spacing, sub-reference points)
+│   └── kl_config.yaml        # KL heatmap settings (reference point, log scale)
 ├── run/                    # Shell scripts for running experiments
 ├── activations/            # Recorded activation .pt files (intermediate)
 ├── checkpoints/            # Trained model weights
@@ -83,6 +85,7 @@ All scripts must be run from the project root.
 - **`vis_plots/config.yaml`**: `n_steps` (interpolation resolution), `model_names` (checkpoint paths per model type), `layer_to_interpolate_toy_resnet` (hook layer index: `-2` = input, `-1` = embed, `0+` = residual blocks), input pairs for each data type.
 - **`vis_plateaus/config.yaml`**: `metric` (one of `l2_norm`, `jacobian_norm_full`, `jacobian_norm_layerwise_prod`, `jacobian_determinant_full`, `jacobian_determinant_layerwise_prod`), `source_layer_idx`/`target_layer_idx`, `n_points`, `radius`, `reference_point`, `n_pca_components`, `log_scale`.
 - **`vis_plateaus/contour_config.yaml`**: Same spatial settings plus `n_contour_levels`, `contour_level_spacing` (`even`/`log`), and `sub_reference_points` for marking additional points on the plot.
+- **`vis_plateaus/kl_config.yaml`**: `n_points`, `radius`, `reference_point` (x* in KL(p(y|x*) ‖ p(y|x))), `sub_reference_points`, `log_scale`, `kl_floor` (lower clip for the log color scale).
 
 ## Key Flags
 
@@ -94,8 +97,8 @@ All scripts must be run from the project root.
 | `interpolate_and_record_activations.py` | `--freeze_attention` / `--freeze_mlp` | Freeze attention or MLP outputs during interpolation |
 | All `*_plots.py` / `jacobians_*.py` | `--multi_seed` | Aggregate across seed checkpoints with CIs |
 | `relative_distances_layerwise_plots.py` | `--single_layer N` | Plot only for target layer N |
-| `visualize_plateaus.py` / `visualize_contours.py` | `--model_path` | Override checkpoint path from config |
-| `visualize_plateaus.py` / `visualize_contours.py` | `--multi_seed` | Average metrics across seed checkpoints |
+| `visualize_plateaus.py` / `visualize_contours.py` / `visualize_kl.py` | `--model_path` | Override checkpoint path from config |
+| `visualize_plateaus.py` / `visualize_contours.py` / `visualize_kl.py` | `--multi_seed` | Average metrics across seed checkpoints |
 
 ## Model Architecture
 

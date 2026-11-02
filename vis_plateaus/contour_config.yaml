@@ -19,4 +19,4 @@ n_contour_levels: 15
 contour_level_spacing: "log"  # "even" or "log"
 
 model_names:
-  toy_resnet: "checkpoints/class_spiral/ResNetMLP_epoch500/noise-0.00-multi_seed_5_runs"
+  toy_resnet: "checkpoints/class_spiral/ResNetMLP/noise-0.00-multi_seed_5_runs"
