@@ -16,13 +16,15 @@ config = load_config()
 N_STEPS = config['n_steps']
 
 
-def compute_jacobian_full_residual_toy(model, resid_post_layer0: torch.Tensor, device: str) -> torch.Tensor:
+def compute_jacobian_full_residual_toy(model, resid_post_layer0: torch.Tensor, device: str, activations: dict) -> torch.Tensor:
     """
-    Compute jacobian from layer 0 to last layer (toy ResNet).
+    Compute jacobian from layer 0 to last layer (toy ResNet): ∂(layer_N resid_post) / ∂(layer_0 resid_post).
+    layer_0 resid_post is the output of block 0, so the function is blocks 1, ..., N.
     No sequence dimension.
 
     Args:
         resid_post_layer0: [n_steps, hidden_dim]
+        activations: Dict with recorded activations for validation
 
     Returns:
         Jacobian: [n_steps, hidden_dim, hidden_dim]
@@ -33,13 +35,21 @@ def compute_jacobian_full_residual_toy(model, resid_post_layer0: torch.Tensor, d
 
     def forward_through_all_layers(resid):
         activation = resid.unsqueeze(0)
-        for layer_idx in range(n_layers):
+        for layer_idx in range(1, n_layers):
             activation = model.blocks[layer_idx](activation)
         return activation.squeeze(0)
 
     for step_idx in tqdm(range(n_steps), desc="Steps", leave=False):
         resid = resid_post_layer0[step_idx].to(device)
         jac = torch.func.jacrev(forward_through_all_layers)(resid)
+
+        # Validate against recorded activations
+        with torch.no_grad():
+            computed_out = forward_through_all_layers(resid)
+            recorded_out = activations[f'layer{n_layers - 1}_resid_post'][step_idx].to(device)
+            diff = torch.norm(computed_out - recorded_out).item()
+            assert diff < 1e-4, f"Full residual validation failed: step {step_idx}, diff {diff}"
+
         jacobians.append(jac.detach().cpu())
         del jac, resid
         torch.cuda.empty_cache()
@@ -64,7 +74,7 @@ def compute_full_residual_norms_for_model(checkpoint_path, pairs_ids, layer_to_i
     for pair_ids in tqdm(pairs_ids, desc="Pairs", leave=False):
         activations = load_activations(checkpoint_path, layer_to_interpolate, pair_ids, n_steps)
         resid_post_layer0 = activations['layer0_resid_post']
-        jacobians = compute_jacobian_full_residual_toy(model, resid_post_layer0, device)
+        jacobians = compute_jacobian_full_residual_toy(model, resid_post_layer0, device, activations)
 
         norms = torch.norm(jacobians.view(jacobians.shape[0], -1), dim=1)
 
