@@ -5,10 +5,10 @@ import torch.nn.functional as F
 
 import sys
 sys.path.append('./train')
-from model import ResNetMLP, ResNetMLPSkeleton
+from model import ResNetMLP
 
 
-def compute_jacobian_source_target_toy(model: Union[ResNetMLP, ResNetMLPSkeleton], data: torch.Tensor, source_layer_idx: int, target_layer_idx: int, device: str) -> torch.Tensor:
+def compute_jacobian_source_target_toy(model: ResNetMLP, data: torch.Tensor, source_layer_idx: int, target_layer_idx: int, device: str) -> torch.Tensor:
     """
     Compute jacobian from source layer to target layer, without respect to the intermediate layers.
 
@@ -39,7 +39,7 @@ def compute_jacobian_source_target_toy(model: Union[ResNetMLP, ResNetMLPSkeleton
 
     return torch.stack(jacobians)
 
-def _compute_jacobian_layerwise_toy(model: Union[ResNetMLP, ResNetMLPSkeleton], data: torch.Tensor, layer_idx: int, device: str, expected_output: torch.Tensor) -> torch.Tensor:
+def _compute_jacobian_layerwise_toy(model: ResNetMLP, data: torch.Tensor, layer_idx: int, device: str, expected_output: torch.Tensor) -> torch.Tensor:
     """
     Compute jacobian for single block: ∂(layer_i+1 resid_post) / ∂(layer_i resid_post).
     Toy ResNet: no sequence dimension.
@@ -80,7 +80,7 @@ def _compute_jacobian_layerwise_toy(model: Union[ResNetMLP, ResNetMLPSkeleton], 
 
     return torch.stack(jacobians)
 
-def compute_jacobian_source_target_layerwise_toy(model: Union[ResNetMLP, ResNetMLPSkeleton], source_layer_idx: int, target_layer_idx: int, device: str, activations: dict) -> torch.Tensor:
+def compute_jacobian_source_target_layerwise_toy(model: ResNetMLP, source_layer_idx: int, target_layer_idx: int, device: str, activations: dict) -> torch.Tensor:
     """
     Compute jacobian from source layer to target layer, by multiplying the jacobian of each intermediate layer.
     Args:
@@ -138,7 +138,7 @@ def compute_frobenius_norm(jacobians: torch.Tensor) -> torch.Tensor:
     jacobians = jacobians.view(*dims_batch, -1)
     return torch.norm(jacobians, dim=-1)  # (dims_batch...)
 
-def compute_jacobian_to_logits(model: Union[ResNetMLP, ResNetMLPSkeleton], data: torch.Tensor) -> torch.Tensor:
+def compute_jacobian_to_logits(model: ResNetMLP, data: torch.Tensor) -> torch.Tensor:
     """
     Compute the product of singular values of the Jacobian from last block's resid_post to logits.
     Handles the non-square mapping: final_norm -> relu -> output_layer.
@@ -169,30 +169,24 @@ def compute_jacobian_to_logits(model: Union[ResNetMLP, ResNetMLPSkeleton], data:
     return torch.stack(jacobians)  # (n_points, d_output, d_input)
 
 
-def compute_jacobian_input_to_embed(model: Union[ResNetMLP, ResNetMLPSkeleton], data: torch.Tensor) -> torch.Tensor:
+def compute_jacobian_input_to_embed(model: ResNetMLP, data: torch.Tensor) -> torch.Tensor:
     """
-    Compute the product of singular values of the input_layer weight matrix.
-    For ResNetMLPSkeleton (no input_layer / identity mapping), returns 1.0.
+    Compute the Jacobian of the input_layer (input -> embedding) at each point.
 
     Returns:
         Tensor of shape (n_points, d_embed, d_input) containing Jacobian matrices.
     """
+    def forward_input_to_embed(x):
+        return model.input_layer(x)
+
+    jacobian = torch.func.jacrev(forward_input_to_embed)
     jacobians = []
-    if hasattr(model, 'input_layer'):
-        
-        def forward_input_to_embed(x):
-            return model.input_layer(x)
-        
-        jacobian = torch.func.jacrev(forward_input_to_embed)
-        for i in tqdm(range(data.shape[0]), desc="Computing input→embed Jacobian norms"):
-            jac = jacobian(data[i])
-            jacobians.append(jac.detach().cpu())
-            del jac
-            torch.cuda.empty_cache()
-        return torch.stack(jacobians)  # (n_points, d_embed, d_input)
-    
-    else:
-        return torch.ones(data.shape[0], 1, 1)  # Identity mapping: Jacobian is 1. Shape: (n_points, 1, 1)
+    for i in tqdm(range(data.shape[0]), desc="Computing input→embed Jacobian norms"):
+        jac = jacobian(data[i])
+        jacobians.append(jac.detach().cpu())
+        del jac
+        torch.cuda.empty_cache()
+    return torch.stack(jacobians)  # (n_points, d_embed, d_input)
 
 
 def l2_norm_metric(model, reference_point_activation: Dict[str, torch.Tensor], activations: Dict[str, torch.Tensor], source_layer_idx, target_layer_idx, device) -> Dict[str, Union[torch.Tensor, Dict[str, torch.Tensor]]]:
@@ -245,7 +239,7 @@ def jacobian_norm_metric(model, activations, source_layer_idx, target_layer_idx,
     n_blocks = len(model.blocks)
 
     # Determine effective bounds for the square Jacobian region
-    has_nonsquare_input = (source_layer_idx <= -1 and hasattr(model, 'input_layer'))
+    has_nonsquare_input = (source_layer_idx <= -1)
     effective_source = -1 if has_nonsquare_input else source_layer_idx
 
     # Full Jacobian convention: range(source, target) applies layers[source:target]
@@ -290,7 +284,7 @@ def jacobian_norm_layerwise_prod_metric(model, activations, source_layer_idx, ta
     target_is_logits = (target_layer_idx == 'logits')
     n_blocks = len(model.blocks)
 
-    has_nonsquare_input = (source_layer_idx <= -1 and hasattr(model, 'input_layer'))
+    has_nonsquare_input = (source_layer_idx <= -1)
     effective_source = -1 if has_nonsquare_input else source_layer_idx
 
     # Layerwise convention: range(source, target) with each step applying layers[idx+1]
@@ -347,7 +341,7 @@ def jacobian_determinant_metric(model, activations, source_layer_idx, target_lay
     n_blocks = len(model.blocks)
 
     # Determine effective bounds for the square Jacobian region
-    has_nonsquare_input = (source_layer_idx <= -1 and hasattr(model, 'input_layer'))
+    has_nonsquare_input = (source_layer_idx <= -1)
     effective_source = -1 if has_nonsquare_input else source_layer_idx
 
     # Full Jacobian convention: range(source, target) applies layers[source:target]
@@ -393,7 +387,7 @@ def jacobian_determinant_layerwise_prod_metric(model, activations, source_layer_
     target_is_logits = (target_layer_idx == 'logits')
     n_blocks = len(model.blocks)
 
-    has_nonsquare_input = (source_layer_idx <= -1 and hasattr(model, 'input_layer'))
+    has_nonsquare_input = (source_layer_idx <= -1)
     effective_source = -1 if has_nonsquare_input else source_layer_idx
 
     # Layerwise convention: range(source, target) with each step applying layers[idx+1]

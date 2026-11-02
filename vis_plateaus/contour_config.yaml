@@ -18,5 +18,5 @@ n_pca_components: 2
 n_contour_levels: 15
 contour_level_spacing: "log"  # "even" or "log"
 
-model_names:
-  toy_resnet: "checkpoints/class_spiral/ResNetMLP/noise-0.00-multi_seed_5_runs"
+# Run directory (checkpoints/{task}/noise-{std}); results are averaged over every seed-* in it
+checkpoint_dir: "checkpoints/class_spiral/noise-0.00"

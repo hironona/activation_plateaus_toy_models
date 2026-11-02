@@ -13,20 +13,14 @@ Run from the project root (GPU recommended):
 import os
 import sys
 import argparse
-import importlib.util
 import torch
 from tqdm import tqdm
 
 sys.path.append('./vis_plateaus_lm')
 from utils import (load_config, get_anchor_words, resid_hook_name, build_surface, make_plane_grid, grid_coords,
                    construct_filepath, SURFACES)
-from compute_metrics import (forward_from_layer, unembed_gram_factor, jacobian_norm_layerwise_prod_to_logits,
+from compute_metrics import (load_model, forward_from_layer, unembed_gram_factor, jacobian_norm_layerwise_prod_to_logits,
                              jacobian_norm_direct_to_logits)
-
-# vis_plots/utils.py has the model loaders; import it under a distinct name to avoid clashing with ./utils.py
-_spec = importlib.util.spec_from_file_location("vis_plots_utils", "./vis_plots/utils.py")
-vis_plots_utils = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(vis_plots_utils)
 
 
 def tokenize_sentences(model, prefix: str, words, prepend_bos: bool) -> torch.Tensor:
@@ -181,7 +175,7 @@ def main():
     source_layer_idx = config['source_layer_idx']
     words = get_anchor_words(config['token_pairs'])
 
-    model = vis_plots_utils.load_model(config['model_name'])
+    model = load_model(config['model_name'])
     device = 'cuda' if torch.cuda.is_available() else 'cpu'  # Same device choice as the loader
     model = model.to(device)
     model.eval()

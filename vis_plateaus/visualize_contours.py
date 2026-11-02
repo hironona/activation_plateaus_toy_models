@@ -12,7 +12,6 @@ Plot modes:
   - d_source > 2: PCA + scatter colored by L2 distance level
 """
 
-from typing import Union
 import torch
 import numpy as np
 import os
@@ -25,11 +24,9 @@ import math
 
 import sys
 sys.path.append('./train')
-from utils import load_config, load_model_from_checkpoint, get_model_names, get_model_name, LAYER_ARGUMENT_IDX_MAPPING
+from utils import load_config, resolve_layer_idx, find_seed_checkpoints, load_model_from_checkpoint, plot_dir
 from visualize_plateaus import collect_activations_resid_post, generate_uniform_data
-from model import ResNetMLP, ResNetMLPSkeleton
 
-LAYER_ALIASES = {'embedding': 'embed'}
 SUB_REF_COLOR = '#CD5C5C'  # indianred (muted red)
 
 config = load_config("vis_plateaus/contour_config.yaml")
@@ -378,22 +375,14 @@ def visualize_open_ball_preimage(
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Visualize pre-image of open balls in target space'
+        description='Visualize pre-image of open balls in target space (L2 distances averaged over seed checkpoints)'
     )
-    parser.add_argument('--model_type', type=str, choices=['toy_resnet'], required=True)
-    parser.add_argument('--data_type', type=str, choices=['class_spiral'], required=True)
-    parser.add_argument('--model_path', type=str,
-                        help='Path to checkpoint file or directory')
-    parser.add_argument('--multi_seed', action='store_true',
-                        help='Average L2 distances across all seed checkpoints')
+    parser.add_argument('--checkpoint_dir', type=str,
+                        help='Override checkpoint_dir from config (run directory, seed directory or .pt file)')
     args = parser.parse_args()
 
-    model_type = args.model_type
-
-    if args.model_path:
-        config['model_names'][model_type] = args.model_path
-    model_paths = get_model_names(config, model_type)
-    MODEL_NAME = get_model_name(config, model_type)
+    checkpoint_dir = args.checkpoint_dir or config['checkpoint_dir']
+    model_paths = find_seed_checkpoints(checkpoint_dir)
 
     N_POINTS      = config['n_points']
     RADIUS        = config['radius']
@@ -410,13 +399,6 @@ def main():
     if raw_sub_refs is not None:
         SUB_REFERENCE_POINTS = torch.tensor(raw_sub_refs, dtype=torch.float32)
 
-    def resolve_layer_idx(raw_value):
-        try:
-            return int(raw_value)          # handles -2, -1, 0, 1, ... directly
-        except (ValueError, TypeError):
-            key = LAYER_ALIASES.get(raw_value, raw_value)
-            return LAYER_ARGUMENT_IDX_MAPPING[model_type][key]  # 'logits' → 'logits'
-
     source_layer_idx = resolve_layer_idx(SOURCE_LAYER_IDX_RAW)
     target_layer_idx = resolve_layer_idx(TARGET_LAYER_IDX_RAW)  # int or 'logits'
 
@@ -425,61 +407,39 @@ def main():
     data = generate_uniform_data(N_POINTS, RADIUS)
     grid_size = int(math.sqrt(N_POINTS))
 
-    output_dir = f"plots/{MODEL_NAME}/contours"
-
     src_label = 'input' if source_layer_idx == -2 else f"layer {SOURCE_LAYER_IDX_RAW}"
     tgt_label = TARGET_LAYER_IDX_RAW
 
-    if args.multi_seed:
-        print(f"Multi-seed mode: {len(model_paths)} seeds")
-        all_l2 = []
-        first_result = None
-
-        for idx, ckpt in enumerate(model_paths):
-            print(f"  Seed {idx + 1}/{len(model_paths)}: {ckpt}")
-            result = compute_for_checkpoint(
-                ckpt, data, REFERENCE_POINT, source_layer_idx, target_layer_idx, device,
-                sub_reference_points=SUB_REFERENCE_POINTS,
-            )
-            all_l2.append(result['l2_distances'])
-            if first_result is None:
-                first_result = result
-
-        l2_distances = torch.stack(all_l2).mean(dim=0)   # (n_points,)
-        n_seeds = len(model_paths)
-        source_activations = first_result['source_activations']
-        ref_source_act     = first_result['ref_source_act']
-        sub_ref_source_acts = first_result['sub_ref_source_acts']
-
-        title = (
-            f"Pre-image of Open Balls (mean over {n_seeds} seeds)\n"
-            f"Source: {src_label}, Target: {tgt_label} | "
-            f"Ref: {REFERENCE_POINT.tolist()} | "
-            f"Spacing: {LEVEL_SPACING}"
-        )
-
-    else:
-        ckpt = model_paths[0]
-        print(f"Checkpoint: {ckpt}")
+    print(f"{len(model_paths)} seed checkpoint(s)")
+    all_l2 = []
+    first_result = None
+    for idx, ckpt in enumerate(model_paths):
+        print(f"  Seed {idx + 1}/{len(model_paths)}: {ckpt}")
         result = compute_for_checkpoint(
             ckpt, data, REFERENCE_POINT, source_layer_idx, target_layer_idx, device,
             sub_reference_points=SUB_REFERENCE_POINTS,
         )
-        l2_distances        = result['l2_distances']
-        source_activations  = result['source_activations']
-        ref_source_act      = result['ref_source_act']
-        sub_ref_source_acts = result['sub_ref_source_acts']
+        all_l2.append(result['l2_distances'])
+        if first_result is None:
+            first_result = result
 
-        title = (
-            f"Pre-image of Open Balls\n"
-            f"Source: {src_label}, Target: {tgt_label} | "
-            f"Ref: {REFERENCE_POINT.tolist()} | "
-            f"Spacing: {LEVEL_SPACING}"
-        )
+    # Average distances across seeds; use the first seed's source-space layout for plotting
+    l2_distances = torch.stack(all_l2).mean(dim=0)   # (n_points,)
+    n_seeds = len(model_paths)
+    source_activations = first_result['source_activations']
+    ref_source_act     = first_result['ref_source_act']
+    sub_ref_source_acts = first_result['sub_ref_source_acts']
+
+    title = (
+        f"Pre-image of Open Balls (mean over {n_seeds} seeds)\n"
+        f"Source: {src_label}, Target: {tgt_label} | "
+        f"Ref: {REFERENCE_POINT.tolist()} | "
+        f"Spacing: {LEVEL_SPACING}"
+    )
 
     print(f"L2 distance range: [{l2_distances.min():.4f}, {l2_distances.max():.4f}]")
 
-    output_path = (f"{output_dir}/"
+    output_path = (f"{plot_dir(checkpoint_dir)}/contours/"
                    f"contours_src_{SOURCE_LAYER_IDX_RAW}_tgt_{TARGET_LAYER_IDX_RAW}_ref_{REFERENCE_POINT.tolist()}_spacing_{LEVEL_SPACING}.png")
 
     visualize_open_ball_preimage(

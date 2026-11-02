@@ -1,21 +1,12 @@
-# Configuration for plots
+# Configuration for the interpolation analyses of the toy ResNet
 
 n_steps: 50
 
-model_names:
-  hooked_transformer: "gpt2-large"
-  vit: "facebook/dinov2-large"
-  resnet: "microsoft/resnet-101"
-  toy_resnet: "checkpoints/class_spiral/ResNetMLP_epoch500/noise-0.075-multi_seed_5_runs"
-  # Add more seed checkpoints here
+# Run directory (checkpoints/{task}/noise-{std}); the final-epoch checkpoint of every seed-* in it is used
+checkpoint_dir: "checkpoints/class_spiral/noise-0.00"
 
-layer_to_interpolate_toy_resnet: -2
-
-text: 
-  shared_context: "The house was"
-  token_pairs:
-    - ["big", "in"]
-    - ["big", "large"]
+# Layer whose activations the plots read: -2 = input, -1 = embed, 0+ = residual blocks
+layer_to_interpolate: -2
 
 class_spiral:
   pairs:
@@ -34,37 +25,3 @@ class_spiral:
       [0.25, 0.0],
       [0.5, -0.125]
     ]
-  
-
-image:
-  # https://cocodataset.org/#explore?id=114269
-  # https://cocodataset.org/#explore?id=434958
-  shared_image: https://farm6.staticflickr.com/5216/5423157110_0e78ccd4c7_z.jpg # cat and human
-  # image_pairs:
-  #   - [
-  #       # https://cocodataset.org/#explore?id=151497
-  #       "https://farm1.staticflickr.com/6/8378612_34ab6787ae_z.jpg",  # cat
-  #       "https://farm6.staticflickr.com/5309/5872877852_f0008b85e8_z.jpg" # cat of another type
-  #       # https://cocodataset.org/#explore?id=299180
-  #     ]
-  #   - [
-  #       # https://cocodataset.org/#explore?id=151497
-  #       "https://farm1.staticflickr.com/6/8378612_34ab6787ae_z.jpg",  # cat
-  #       "https://farm4.staticflickr.com/3155/3054220240_700f232193_z.jpg" # cat of a similar type
-  #       # https://cocodataset.org/#explore?id=502813
-  #     ]
-  image_pairs:
-    - [
-        "images/dog1.jpg",  # dog1
-        "images/dog2.jpg" # dog2
-      ]
-    - [
-        "images/dog1.jpg",  # dog1
-        "images/cat.jpg" # cat
-      ]
-  shared_image_id: ""
-  pairs_ids:
-    - ["dog1", "dog2"]
-    - ["dog1", "cat"]
-
-# images can be found in the Coco dataset: https://cocodataset.org/#explore

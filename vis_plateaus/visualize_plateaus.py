@@ -4,30 +4,26 @@ Visualize activation plateaus by plotting data points colored by metrics
 (L2 norm, Jacobian determinant, layerwise product of Jacobian determinants).
 """
 
-from typing import Union, Dict, Any, List
+from typing import Dict
 import torch
 import numpy as np
 import os
 import argparse
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
-from mpl_toolkits.mplot3d import Axes3D
 from sklearn.decomposition import PCA
-from tqdm import tqdm
 import math
 
 import sys
 sys.path.append('./train')
-from utils import load_config, load_model, load_model_from_checkpoint, construct_filepath, get_n_layers_from_model, get_model_names, get_model_name, LAYER_ARGUMENT_IDX_MAPPING
+from utils import load_config, resolve_layer_idx, find_seed_checkpoints, load_model_from_checkpoint, plot_dir
 from compute_metrics import l2_norm_metric, jacobian_determinant_metric, jacobian_determinant_layerwise_prod_metric, jacobian_norm_metric, jacobian_norm_layerwise_prod_metric
-from model import ResNetMLP, ResNetMLPSkeleton
+from model import ResNetMLP
 from data import ToyDataset
 
 config = load_config("vis_plateaus/config.yaml")
 
 METRIC_OPTIONS = ['l2_norm', 'jacobian_determinant_full', 'jacobian_determinant_layerwise_prod', 'jacobian_norm_full', 'jacobian_norm_layerwise_prod']
-
-LAYER_ALIASES = {'embedding': 'embed'}
 
 # Muted/pastel colors for background class overlay (up to 10 classes)
 CLASS_COLORS = [
@@ -44,7 +40,7 @@ CLASS_COLORS = [
 ]
 
 
-def collect_activations_resid_post(model: Union[ResNetMLP, ResNetMLPSkeleton], data, source_layer_idx: int, target_layer_idx: int, device) -> Dict[str, torch.Tensor]:
+def collect_activations_resid_post(model: ResNetMLP, data, source_layer_idx: int, target_layer_idx: int, device) -> Dict[str, torch.Tensor]:
 
     activations = {}
 
@@ -116,7 +112,7 @@ def visualize_plateau(
     output_path: str,
     n_pca_components: int = 3,
     reference_point_source_act: torch.Tensor = None,
-    model: Union[ResNetMLP, ResNetMLPSkeleton] = None,
+    model: ResNetMLP = None,
     source_layer_idx: int = None,
     device: str = 'cpu',
     task_config: dict = None,
@@ -362,21 +358,12 @@ def compute_metric_for_checkpoint(
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Visualize activation plateaus')
-    parser.add_argument('--model_type', type=str, choices=['hooked_transformer', 'vit', 'resnet', 'toy_resnet'], required=True, help='Type of model to use')
-    parser.add_argument('--data_type', type=str, choices=['text', 'image', 'class_spiral'], required=True, help='Type of data to use')
-    parser.add_argument('--model_path', type=str, help='Path to model checkpoint or directory')
-    parser.add_argument('--multi_seed', action='store_true', help='Average metric across all seed checkpoints (toy_resnet only)')
-
+    parser = argparse.ArgumentParser(description='Visualize activation plateaus (metric averaged over seed checkpoints)')
+    parser.add_argument('--checkpoint_dir', type=str, help='Override checkpoint_dir from config (run directory, seed directory or .pt file)')
     args = parser.parse_args()
 
-    model_type = args.model_type
-
-    # Load config values
-    if args.model_path:
-        config['model_names'][model_type] = args.model_path
-    model_paths = get_model_names(config, model_type)
-    MODEL_NAME  = get_model_name(config, model_type)
+    checkpoint_dir = args.checkpoint_dir or config['checkpoint_dir']
+    model_paths = find_seed_checkpoints(checkpoint_dir)
 
     N_POINTS = config['n_points']
     RADIUS = config['radius']
@@ -387,16 +374,6 @@ def main():
     N_PCA_COMPONENTS = config.get('n_pca_components', 3)
     LOG_SCALE = config.get('log_scale', False)
 
-    # Resolve layer indices (handle string aliases like 'embedding' -> 'embed')
-    def resolve_layer_idx(raw_value):
-        # if raw_value == 'input' or raw_value == -2:
-        #     raise ValueError("Source layer cannot be 'input' or -2 because the input space is not a part of the model layers.")
-        try:
-            return int(raw_value)
-        except (ValueError, TypeError):
-            key = LAYER_ALIASES.get(raw_value, raw_value)
-            return LAYER_ARGUMENT_IDX_MAPPING[model_type][key]
-
     source_layer_idx = resolve_layer_idx(SOURCE_LAYER_IDX_RAW)
     target_layer_idx = resolve_layer_idx(TARGET_LAYER_IDX_RAW)
     target_is_logits = (target_layer_idx == 'logits')
@@ -406,80 +383,38 @@ def main():
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    if model_type != 'toy_resnet':
-        raise ValueError(f"Model type {model_type} currently not supported")
-
     # Generate data once (shared across all seeds)
-    # data = generate_data_around_point(REFERENCE_POINT, N_POINTS, RADIUS)
     data = generate_uniform_data(N_POINTS, RADIUS)
 
-    # Create directory
-    output_dir = f"plots/{MODEL_NAME}/plateaus"
-
-    if args.multi_seed:
-        assert model_type == 'toy_resnet', "--multi_seed is only supported for toy_resnet"
-        print(f"Multi-seed mode: {len(model_paths)} seeds | METRIC: {METRIC}")
-
-        all_metric_values = []
-        first_seed_result = None
-
-        for idx, checkpoint_path in enumerate(model_paths):
-            print(f"  Seed {idx + 1}/{len(model_paths)}: {checkpoint_path}")
-            result = compute_metric_for_checkpoint(
-                checkpoint_path, data, REFERENCE_POINT, METRIC,
-                source_layer_idx, target_layer_idx, device,
-            )
-            all_metric_values.append(result['metric_values'])
-            if first_seed_result is None:
-                first_seed_result = result
-
-        # Average metric values across seeds
-        stacked = torch.stack(all_metric_values)  # (n_seeds, n_points)
-        mean_metric = stacked.mean(dim=0)          # (n_points,)
-        n_seeds = len(model_paths)
-
-        # Use first seed's spatial layout for plotting
-        source_activations = first_seed_result['source_activations']
-        ref_source_act = first_seed_result['ref_source_act']
-        task_config = first_seed_result['task_config']
-        model = first_seed_result['model']
-
-        metric_values = mean_metric
-
-        # Title
-        target_label = TARGET_LAYER_IDX_RAW if target_is_logits else f"layer {TARGET_LAYER_IDX_RAW}"
-        source_label = SOURCE_LAYER_IDX_RAW if isinstance(SOURCE_LAYER_IDX_RAW, str) else f"layer {SOURCE_LAYER_IDX_RAW}"
-        title = f"Plateau Visualization: {METRIC} (mean over {n_seeds} seeds, log scale: {LOG_SCALE})\nSource: {source_label}, Target: {target_label}"
-
-        if METRIC == 'l2_norm' and 'predicted_class' in first_seed_result:
-            title += f"\nRef point {REFERENCE_POINT.tolist()} — predicted class: {first_seed_result['predicted_class']}"
-
-        output_path = f"{output_dir}/{METRIC}_src-{SOURCE_LAYER_IDX_RAW}_tgt-{TARGET_LAYER_IDX_RAW}.png"
-
-    else:
-        MODEL_NAME = model_paths[0]
-        print(f"Model: {MODEL_NAME} | N_POINTS: {N_POINTS} | REFERENCE_POINT: {REFERENCE_POINT} | RADIUS: {RADIUS} | METRIC: {METRIC}")
-        print(f"Source layer: {SOURCE_LAYER_IDX_RAW} ({source_layer_idx}) | Target layer: {TARGET_LAYER_IDX_RAW} ({target_layer_idx})")
-
+    print(f"{len(model_paths)} seed checkpoint(s) | METRIC: {METRIC}")
+    all_metric_values = []
+    first_seed_result = None
+    for idx, checkpoint_path in enumerate(model_paths):
+        print(f"  Seed {idx + 1}/{len(model_paths)}: {checkpoint_path}")
         result = compute_metric_for_checkpoint(
-            MODEL_NAME, data, REFERENCE_POINT, METRIC,
+            checkpoint_path, data, REFERENCE_POINT, METRIC,
             source_layer_idx, target_layer_idx, device,
         )
+        all_metric_values.append(result['metric_values'])
+        if first_seed_result is None:
+            first_seed_result = result
 
-        source_activations = result['source_activations']
-        ref_source_act = result['ref_source_act']
-        task_config = result['task_config']
-        model = result['model']
-        metric_values = result['metric_values']
+    # Average metric values across seeds; use the first seed's spatial layout for plotting
+    metric_values = torch.stack(all_metric_values).mean(dim=0)  # (n_points,)
+    n_seeds = len(model_paths)
+    source_activations = first_seed_result['source_activations']
+    ref_source_act = first_seed_result['ref_source_act']
+    task_config = first_seed_result['task_config']
+    model = first_seed_result['model']
 
-        # Title
-        target_label = TARGET_LAYER_IDX_RAW if target_is_logits else f"layer {TARGET_LAYER_IDX_RAW}"
-        source_label = SOURCE_LAYER_IDX_RAW if isinstance(SOURCE_LAYER_IDX_RAW, str) else f"layer {SOURCE_LAYER_IDX_RAW}"
-        title = f"Plateau Visualization: {METRIC} (log scale: {LOG_SCALE})\nSource: {source_label}, Target: {target_label}, Radius: {RADIUS}"
-        if METRIC == 'l2_norm' and 'predicted_class' in result:
-            title += f"\nRef point {REFERENCE_POINT.tolist()} — predicted class: {result['predicted_class']}"
+    # Title
+    target_label = TARGET_LAYER_IDX_RAW if target_is_logits else f"layer {TARGET_LAYER_IDX_RAW}"
+    source_label = SOURCE_LAYER_IDX_RAW if isinstance(SOURCE_LAYER_IDX_RAW, str) else f"layer {SOURCE_LAYER_IDX_RAW}"
+    title = f"Plateau Visualization: {METRIC} (mean over {n_seeds} seeds, log scale: {LOG_SCALE})\nSource: {source_label}, Target: {target_label}"
+    if METRIC == 'l2_norm' and 'predicted_class' in first_seed_result:
+        title += f"\nRef point {REFERENCE_POINT.tolist()} — predicted class: {first_seed_result['predicted_class']}"
 
-        output_path = f"{output_dir}/{METRIC}_src-{SOURCE_LAYER_IDX_RAW}_tgt-{TARGET_LAYER_IDX_RAW}.png"
+    output_path = f"{plot_dir(checkpoint_dir)}/plateaus/{METRIC}_src-{SOURCE_LAYER_IDX_RAW}_tgt-{TARGET_LAYER_IDX_RAW}.png"
 
     if LOG_SCALE:
         metric_values = torch.log(metric_values + 1e-8)  # Add small constant to avoid log(0)

@@ -12,6 +12,52 @@ last-token Jacobians:
 import torch
 from typing import Callable, Dict, List
 
+# Standardized names of the GPT-2 models without LayerNorm (Heimersheim, 2024)
+NO_LAYERNORM_MODELS = {
+    "gpt2-small_LNFree": "schaeff/gpt2-small_LNFree300",
+    "gpt2-medium_LNFree": "schaeff/gpt2-medium_LNFree500",
+    "gpt2-large_LNFree": "schaeff/gpt2-large_LNFree600",
+    "gpt2-xl_LNFree": "schaeff/gpt2-xl_LNFree800",
+}
+TRANSFORMER_LENS_NAMES = {"gpt2-small": "gpt2", "gpt2-medium": "gpt2-medium", "gpt2-large": "gpt2-large", "gpt2-xl": "gpt2-xl"}
+
+
+def load_model(model_name: str):
+    """
+    Load GPT-2 as a HookedTransformer (fold_ln=False, center_unembed=False) on cuda if available.
+    model_name: "gpt2-{small,medium,large,xl}", or the same with "_LNFree" for the LayerNorm-free variants.
+    """
+    from transformer_lens import HookedTransformer
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    if model_name in TRANSFORMER_LENS_NAMES:
+        return HookedTransformer.from_pretrained(TRANSFORMER_LENS_NAMES[model_name], fold_ln=False,
+                                                 center_unembed=False).to(device)
+    if model_name not in NO_LAYERNORM_MODELS:
+        raise ValueError(f"Unknown model: {model_name}. Available: {list(TRANSFORMER_LENS_NAMES) + list(NO_LAYERNORM_MODELS)}")
+
+    from transformers import GPT2LMHeadModel
+    hf_model = GPT2LMHeadModel.from_pretrained(NO_LAYERNORM_MODELS[model_name]).to("cpu")
+
+    # Undo hacky LayerNorm removal
+    for block in hf_model.transformer.h:
+        for ln in (block.ln_1, block.ln_2):
+            ln.weight.data = ln.weight.data / 1e6
+            ln.eps = 1e-5
+    hf_model.transformer.ln_f.weight.data = hf_model.transformer.ln_f.weight.data / 1e6
+    hf_model.transformer.ln_f.eps = 1e-5
+
+    base_model = TRANSFORMER_LENS_NAMES[model_name.removesuffix("_LNFree")]
+    model = HookedTransformer.from_pretrained(base_model, hf_model=hf_model, fold_ln=True, center_unembed=False).to(device)
+
+    # Properly replace LayerNorms by Identities
+    for block in model.blocks:
+        block.ln1 = torch.nn.Identity()
+        block.ln2 = torch.nn.Identity()
+    model.ln_final = torch.nn.Identity()
+    model.cfg.normalization_type = None
+    return model
+
 
 def block_last_token(model, block_idx: int, context: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
     """

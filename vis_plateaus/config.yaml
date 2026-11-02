@@ -10,5 +10,5 @@ metric: "jacobian_norm_layerwise_prod"  # What metric to use to color each point
 n_pca_components: 3  # Number of PCA components when source dim > this value. Options: 2 or 3
 log_scale: True  # Whether to use log scale for the metric values when coloring the points
 
-model_names:
-  toy_resnet: "checkpoints/class_spiral/ResNetMLP_epoch500/noise-0.00-multi_seed_5_runs"
+# Run directory (checkpoints/{task}/noise-{std}); results are averaged over every seed-* in it
+checkpoint_dir: "checkpoints/class_spiral/noise-0.00"

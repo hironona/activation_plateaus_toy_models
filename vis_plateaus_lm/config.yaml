@@ -1,7 +1,7 @@
 # Configuration for plateau visualization on a 2D plane in GPT-2's residual stream.
 
-model_name: "gpt2-small"  # Loaded via vis_plots/utils.py:load_model (TransformerLens, fold_ln=False)
-prepend_bos: False  # Same convention as vis_plots/interpolate_and_record_activations.py
+model_name: "gpt2-small"  # Loaded via compute_metrics.py:load_model (TransformerLens, fold_ln=False)
+prepend_bos: False
 
 # Sentences are prefix + " " + word. Each " " + word must be a single GPT-2 token.
 prefix: "The house is"
@@ -17,7 +17,7 @@ source_layer_idx: 6
 
 # Surface through the three anchor activations on which points are sampled.
 #   "flat": affine plane through the three points. Grid coordinates are Euclidean distances.
-#   "spherical": slerp-like curved surface (see vis_plots/utils.py:slerp_rescale). The direction moves along the unit
+#   "spherical": slerp-like curved surface (see utils.py:SphericalSurface). The direction moves along the unit
 #     sphere spanned by the three directions and the norm is interpolated linearly, so the paths from the first anchor
 #     to the other two are exactly their slerp_rescale paths. Grid coordinates are geodesic angles (radians) from the
 #     first anchor's direction.

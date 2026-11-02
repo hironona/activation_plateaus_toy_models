@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Utility functions for modular analyses.
+Utility functions for the interpolation analyses of the toy ResNet.
 """
 
 import torch
@@ -8,242 +8,17 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 import yaml
-from transformer_lens import HookedTransformer
-from transformers import GPT2LMHeadModel, GPT2Tokenizer
-from transformers import AutoImageProcessor, AutoModel, ResNetForImageClassification
 from typing import List, Dict, Union
-from PIL import Image
-import requests
-from io import BytesIO
-from pathlib import Path
 
 import sys
-sys.path.append('./train')
-from model import ResNetMLP, ResNetMLPSkeleton
+sys.path.append('./common')
+from checkpoints import find_seed_checkpoints, artifact_subdir, plot_dir
 
-# Dictionary of no-LayerNorm models with standardized names
-NO_LAYERNORM_MODELS = {
-    "gpt2-small_LNFree": "schaeff/gpt2-small_LNFree300",
-    "gpt2-medium_LNFree": "schaeff/gpt2-medium_LNFree500", 
-    "gpt2-large_LNFree": "schaeff/gpt2-large_LNFree600",
-    "gpt2-xl_LNFree": "schaeff/gpt2-xl_LNFree800"
-}
-
-LAYER_ARGUMENT_IDX_MAPPING = {
-    'toy_resnet': {
-        'logits': 'logits',
-        'input': -2,
-        'embed': -1
-    },
-}
-
-def load_gpt2_regular(model_name):
-    """Load regular GPT-2 with LayerNorm."""
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    
-    # Map model names to actual model names
-    model_mapping = {
-        "gpt2-small": "gpt2",
-        "gpt2-medium": "gpt2-medium", 
-        "gpt2-large": "gpt2-large",
-        "gpt2-xl": "gpt2-xl"
-    }
-    
-    if model_name not in model_mapping:
-        raise ValueError(f"Unknown regular model: {model_name}. Available: {list(model_mapping.keys())}")
-    
-    actual_model_name = model_mapping[model_name]
-    model = HookedTransformer.from_pretrained(actual_model_name, fold_ln=False, center_unembed=False).to(device)
-    tokenizer = GPT2Tokenizer.from_pretrained(actual_model_name)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    
-    return model, tokenizer, device, model_name
-
-def load_gpt2_no_ln(model_name):
-    """Load GPT-2 without LayerNorm from the specified model."""
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    
-    if model_name not in NO_LAYERNORM_MODELS:
-        raise ValueError(f"Unknown no-LayerNorm model: {model_name}. Available: {list(NO_LAYERNORM_MODELS.keys())}")
-    
-    hf_model_path = NO_LAYERNORM_MODELS[model_name]
-    
-    # Load the HuggingFace model
-    hf_model = GPT2LMHeadModel.from_pretrained(hf_model_path).to("cpu")
-    
-    # Undo hacky LayerNorm removal
-    for block in hf_model.transformer.h:
-        block.ln_1.weight.data = block.ln_1.weight.data / 1e6
-        block.ln_1.eps = 1e-5
-        block.ln_2.weight.data = block.ln_2.weight.data / 1e6
-        block.ln_2.eps = 1e-5
-    hf_model.transformer.ln_f.weight.data = hf_model.transformer.ln_f.weight.data / 1e6
-    hf_model.transformer.ln_f.eps = 1e-5
-    
-    # Properly replace LayerNorms by Identities
-    def removeLN(transformer_lens_model):
-        for i in range(len(transformer_lens_model.blocks)):
-            transformer_lens_model.blocks[i].ln1 = torch.nn.Identity()
-            transformer_lens_model.blocks[i].ln2 = torch.nn.Identity()
-        transformer_lens_model.ln_final = torch.nn.Identity()
-    
-    # Determine the base model size for TransformerLens
-    if "small" in model_name:
-        base_model = "gpt2"
-    elif "medium" in model_name:
-        base_model = "gpt2-medium"
-    elif "large" in model_name:
-        base_model = "gpt2-large"
-    elif "xl" in model_name:
-        base_model = "gpt2-xl"
-    
-    model = HookedTransformer.from_pretrained(base_model, hf_model=hf_model, fold_ln=True, center_unembed=False).to(device)
-    removeLN(model)
-    model.cfg.normalization_type = None
-    
-    tokenizer = GPT2Tokenizer.from_pretrained(base_model)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    
-    return model, tokenizer, device, model_name
-
-def load_vit_regular(model_name):
-    """Load regular ViT with LayerNorm."""
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    
-    actual_model_name = model_name
-    model = AutoModel.from_pretrained(actual_model_name).to(device)
-    processor = AutoImageProcessor.from_pretrained(actual_model_name)
-
-    return model, processor, device, model_name
-
-def load_resnet(model_name):
-    """Load ResNet."""
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    
-    actual_model_name = model_name
-    model = ResNetForImageClassification.from_pretrained(actual_model_name).to(device)
-    processor = AutoImageProcessor.from_pretrained(actual_model_name)
-
-    return model, processor, device, model_name
-
-def load_model(model_name):
-    """Load either regular, no-LayerNorm GPT-2, or ViT model."""
-    if 'LNFree' in model_name:
-        model, tokenizer, device, actual_name = load_gpt2_no_ln(model_name)
-    elif "gpt2" in model_name:
-        model, tokenizer, device, actual_name = load_gpt2_regular(model_name)
-    elif "vit" in model_name or "dino" in model_name:
-        model, processor, device, actual_name = load_vit_regular(model_name)
-    elif "resnet" in model_name:
-        model, processor, device, actual_name = load_resnet(model_name)
-    else:
-        raise ValueError(f"Unknown model name: {model_name}")
-    
-    # Store the original model name for saving
-    model.original_model_name = model_name
-    return model
-
-def load_model_from_checkpoint(checkpoint_path):
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
-    full_config = checkpoint['config']
-    model_config = full_config['model']
-    model_type = full_config['model_type']
-
-    if model_type == "ResNetMLP":
-        model = ResNetMLP(**model_config)
-    elif model_type == "ResNetMLPSkeleton":
-        model = ResNetMLPSkeleton(**model_config)
-    else:
-        raise ValueError(f"Unknown model type: {model_type}")
-
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.eval()
-    return model, model_config, full_config
-
-def get_n_layers_from_model(model):
-    """Get number of layers from a model, handling both HookedTransformer and ViT models."""
-    if hasattr(model, 'cfg') and hasattr(model.cfg, 'n_layers'):
-        # HookedTransformer model
-        return model.cfg.n_layers
-    elif hasattr(model, 'vit') and hasattr(model.vit, 'encoder') and hasattr(model.vit.encoder, 'layer'):
-        # ViT model
-        return len(model.vit.encoder.layer)
-    elif hasattr(model, 'resnet'):
-        # ResNetForImageClassification
-        return len(model.resnet.encoder.stages)
-    elif hasattr(model, 'encoder') and hasattr(model.encoder, 'stages'):
-        # ResNetModel
-        return len(model.encoder.stages)
-    elif hasattr(model, 'encoder') and hasattr(model.encoder, 'layer'):
-        # Some other transformer models
-        return len(model.encoder.layer)
-    else:
-        print(model.__class__)
-        raise ValueError(f"Cannot determine number of layers for model type: {type(model)}")
-
-def slerp_rescale(v0: torch.Tensor, v1: torch.Tensor, t: float) -> torch.Tensor:
-    """
-    Spherical linear interpolation with norm rescaling.
-    Interpolates angle evenly, interpolates magnitude linearly.
-    Falls back to linear interpolation for (anti)parallel vectors.
-    """
-    # Get norms for rescaling
-    norm_v0 = torch.norm(v0, dim=-1, keepdim=True)
-    norm_v1 = torch.norm(v1, dim=-1, keepdim=True)
-
-    # Normalize vectors
-    v0_norm = v0 / norm_v0
-    v1_norm = v1 / norm_v1
-
-    # Compute angle between normalized vectors
-    dot_product = torch.sum(v0_norm * v1_norm, dim=-1, keepdim=True)
-    dot_product = torch.clamp(dot_product, -1.0, 1.0)
-    theta = torch.acos(torch.abs(dot_product))
-
-    # SLERP computation
-    sin_theta = torch.sin(theta)
-
-    # Fall back to plain linear interpolation (no norm rescaling) when
-    # vectors are nearly parallel or antiparallel. linear_rescale would
-    # snap to endpoints for antiparallel vectors due to norm rescaling;
-    # plain lerp traces a smooth path through intermediate points.
-    if sin_theta.abs().min().item() < 1e-6:
-        return (1 - t) * v0 + t * v1
-
-    weight_v0 = torch.sin((1 - t) * theta) / sin_theta
-    weight_v1 = torch.sin(t * theta) / sin_theta
-    slerp_result = weight_v0 * v0_norm + weight_v1 * v1_norm
-
-    # Rescale to linearly interpolated norm
-    target_norm = (1 - t) * norm_v0 + t * norm_v1
-    return slerp_result * target_norm
-
-def plain_lerp_rescale(v0: torch.Tensor, v1: torch.Tensor, t: float) -> torch.Tensor:
-    return (1 - t) * v0 + t * v1
-
-def lerp_rescale(v0: torch.Tensor, v1: torch.Tensor, t: float) -> torch.Tensor:
-    """
-    Linear interpolation with norm rescaling.
-    Interpolates both angle and magnitude linearly.
-    """
-    # Linear interpolation
-    lerp_result = (1 - t) * v0 + t * v1
-
-    # Rescale to linearly interpolated norm
-    norm_v0 = torch.norm(v0, dim=-1, keepdim=True)
-    norm_v1 = torch.norm(v1, dim=-1, keepdim=True)
-    target_norm = (1 - t) * norm_v0 + t * norm_v1
-
-    lerp_norm = torch.norm(lerp_result, dim=-1, keepdim=True)
-    lerp_result_normalized = lerp_result / (lerp_norm + 1e-10)  # Avoid division by zero
-
-    return lerp_result_normalized * target_norm
 
 def linear_interpolation(v0: torch.Tensor, v1: torch.Tensor, t: float) -> torch.Tensor:
     """Simple linear interpolation without norm rescaling."""
     return (1 - t) * v0 + t * v1
+
 
 def format_pair_ids_for_subdirectory(pairs_ids: List[List[str]]) -> str:
     """Format multiple pairs into a subdirectory path.
@@ -264,25 +39,14 @@ def format_pair_ids_for_subdirectory(pairs_ids: List[List[str]]) -> str:
     return "pairs/" + "_".join(pair_strs)
 
 
-def construct_filepath(model_name: str, shared_id: str, interpolation_layer: int, pair_ids: List[str], n_steps: int, freeze_suffix: str = "") -> str:
-    """Construct full filepath for activation file.
-
-    Args:
-        freeze_suffix: Optional freeze suffix like "_freeze_attn" or "_freeze_mlp"
-    """
-    context_clean = shared_id.replace(" ", "_").replace(".", "").replace(",", "").replace("'", "").replace('"', "")
-    tokens_str = "_".join(pair_ids)
-    filename = f"interpolate_layer{interpolation_layer}{freeze_suffix}_{context_clean}_[{tokens_str}]_{n_steps}steps.pt"
-    return f"./activations/{model_name}/{filename}"
+def construct_filepath(checkpoint_path: str, interpolation_layer: int, pair_ids: List[str], n_steps: int) -> str:
+    """Activation file for one (checkpoint, pair, interpolation layer), mirroring the checkpoint layout."""
+    filename = f"interpolate_layer{interpolation_layer}_[{'_'.join(pair_ids)}]_{n_steps}steps.pt"
+    return os.path.join("activations", artifact_subdir(checkpoint_path), filename)
 
 
-def load_activations(model_name: str, shared_id: str, interpolation_layer: int, pair_ids: List[str], n_steps: int, freeze_suffix: str = "") -> Dict:
-    """Load activations from file.
-
-    Args:
-        freeze_suffix: Optional freeze suffix like "_freeze_attn" or "_freeze_mlp"
-    """
-    filepath = construct_filepath(model_name, shared_id, interpolation_layer, pair_ids, n_steps, freeze_suffix)
+def load_activations(checkpoint_path: str, interpolation_layer: int, pair_ids: List[str], n_steps: int) -> Dict:
+    filepath = construct_filepath(checkpoint_path, interpolation_layer, pair_ids, n_steps)
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"Activations file not found: {filepath}")
     return torch.load(filepath, map_location='cpu')
@@ -294,57 +58,30 @@ def load_config(config_path: str = "./vis_plots/config.yaml") -> Dict:
         return yaml.safe_load(f)
 
 
-def get_model_name(config: Dict, model_type: str) -> str:
-    """Get a single model name/path from config. Returns first element if list, string if string."""
-    val = config['model_names'][model_type]
-    if isinstance(val, list):
-        return val[0]
-    return val
+def get_pairs(config: Dict) -> List[List[List[float]]]:
+    return config['class_spiral']['pairs']
 
-def _find_latest_checkpoint(directory: str) -> str:
-    """Find the latest checkpoint file in a directory."""
 
-    # Return None as fallback if the given path is not a directory
-    if not os.path.isdir(directory):
-        print(f"Warning: {directory} is not a directory. Skipping.")
-        return None
+def get_pairs_ids(config: Dict) -> List[List[str]]:
+    """String ids of each input pair, used in file names and plot titles."""
+    return [[f'{point}' for point in pair] for pair in get_pairs(config)]
 
-    checkpoint_files = [f for f in os.listdir(directory) if f.startswith("checkpoint_epoch_") and f.endswith(".pt")]
-    if not checkpoint_files:
-        raise FileNotFoundError(f"No checkpoint files found in directory: {directory}")
-    
-    # Extract epoch numbers and find the latest
-    def extract_epoch(filename):
-        try:
-            return int(filename.split("checkpoint_epoch_")[1].split(".pt")[0])
-        except:
-            return -1  # In case of unexpected filename format
 
-    latest_checkpoint = max(checkpoint_files, key=extract_epoch)
-    return os.path.join(directory, latest_checkpoint)
+def get_checkpoint_dir(config: Dict, override: str = None) -> str:
+    return override or config['checkpoint_dir']
 
-def get_model_names(config: Dict, model_type: str) -> List[str]:
-    """Get all model names/paths from config as a list. Always returns a list."""
-    val = config['model_names'][model_type]
-    if isinstance(val, list):
-        return val
-    elif isinstance(val, str):
-        path = Path(val)
-        if path.is_file() and path.suffix == ".pt":
-            return [val]
-        else: # when given a directory, return all .pt files in that directory
-            latest_ckpts = [_find_latest_checkpoint(os.path.join(val, timestamp)) for timestamp in os.listdir(val)]
-            return [ckpt for ckpt in latest_ckpts if ckpt is not None]
-    else:
-        raise ValueError(f"Invalid model name format for {model_type}: {val}")
-    
-def load_image(image_path:str) -> Image.Image:
-    """Load an image from the specified path."""
-    if image_path.startswith('http'):
-        response = requests.get(image_path)
-        return Image.open(requests.get(image_path, stream=True).raw).convert("RGB")
-    else:
-        return Image.open(image_path).convert("RGB")
+
+def get_seed_checkpoints(config: Dict, override: str = None) -> List[str]:
+    """Final-epoch checkpoint of every seed in the configured run directory."""
+    checkpoints = find_seed_checkpoints(get_checkpoint_dir(config, override))
+    print(f"{len(checkpoints)} seed checkpoint(s) | Steps: {config['n_steps']}")
+    return checkpoints
+
+
+def pairs_plot_dir(checkpoint_dir: str, pairs_ids: List[List[str]]) -> str:
+    out = os.path.join(plot_dir(checkpoint_dir), format_pair_ids_for_subdirectory(pairs_ids))
+    os.makedirs(out, exist_ok=True)
+    return out
 
 
 def get_n_layers(activations: Dict) -> int:
@@ -412,8 +149,8 @@ def aggregate_metric_data(
             for layer_key in sample:
                 stacked = torch.stack([seed[pair_key][layer_key] for seed in all_seeds_data])
                 mean_layers[layer_key] = stacked.mean(dim=0)
-                stds = stacked.std(dim=0)
                 n = stacked.shape[0]
+                stds = stacked.std(dim=0) if n > 1 else torch.zeros_like(stacked[0])
                 std_layers[layer_key] = stds * confidence_level / np.sqrt(n)
             mean_dict[pair_key] = mean_layers
             std_dict[pair_key] = std_layers
@@ -421,8 +158,8 @@ def aggregate_metric_data(
             # Single tensor
             stacked = torch.stack([seed[pair_key] for seed in all_seeds_data])
             mean_dict[pair_key] = stacked.mean(dim=0)
-            stds = stacked.std(dim=0)
             n = stacked.shape[0]
+            stds = stacked.std(dim=0) if n > 1 else torch.zeros_like(stacked[0])
             std_dict[pair_key] = stds * confidence_level / np.sqrt(n)
     return mean_dict, std_dict
 
@@ -433,7 +170,6 @@ def generate_interpolation_results_plot(
     ylabel: str,
     output_path: str,
     n_steps: int,
-    shared_id: str,
     pairs_ids: List[List[str]],
     alpha_range: List[float] = [0, 1],
     skip_interpolation_layer: bool = True,
@@ -451,8 +187,7 @@ def generate_interpolation_results_plot(
         ylabel: Y-axis label
         output_path: Path to save the plot
         n_steps: Number of interpolation steps
-        shared_context: Shared context string (e.g., "The house at the end of the street was")
-        token_pairs: List of token pairs (e.g., [["very", "quite"], ["very", "white"]])
+        pairs_ids: List of input pairs (one subplot each)
         alpha_range: Range for alpha values (default: [0, 1])
         skip_interpolation_layer: Whether to skip layer 0 (interpolation layer) in multi-layer plots
     """
@@ -530,7 +265,7 @@ def generate_interpolation_results_plot(
                fontsize=10, color='gray', alpha=0.9, transform=ax.get_xaxis_transform())
 
         # Formatting
-        ax.set_title(f'{shared_id} [{pair_ids[0]} → {pair_ids[1]}]', fontsize=14)
+        ax.set_title(f'{pair_ids[0]} → {pair_ids[1]}', fontsize=14)
         ax.set_xlabel('Interpolation α', fontsize=12)
         if i == 0:
             ax.set_ylabel(ylabel, fontsize=12)

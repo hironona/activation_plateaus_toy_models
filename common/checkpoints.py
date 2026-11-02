@@ -87,7 +87,8 @@ def artifact_subdir(path: str) -> str:
     Path of a run directory / checkpoint relative to checkpoints/, without the .pt extension. Used to mirror the
     checkpoint layout under plots/ and activations/.
     """
-    rel = os.path.relpath(os.path.splitext(os.path.normpath(path))[0], CHECKPOINT_ROOT)
+    path = os.path.normpath(path).removesuffix('.pt')  # not splitext: run dirs like noise-0.00 contain dots
+    rel = os.path.relpath(path, CHECKPOINT_ROOT)
     if rel.startswith('..'):
         raise ValueError(f"Checkpoints must live under {CHECKPOINT_ROOT}/ (got {path})")
     return rel

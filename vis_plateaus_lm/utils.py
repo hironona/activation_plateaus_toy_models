@@ -125,8 +125,9 @@ class FlatSurface:
 
 class SphericalSurface:
     """
-    Curved surface through the three anchors, generalizing vis_plots/utils.py:slerp_rescale from a path to a surface:
-    the direction moves along the unit sphere and the norm is interpolated linearly.
+    Curved surface through the three anchors, generalizing slerp_rescale (slerp of the direction,
+    linear interpolation of the norm) from a path to a surface: the direction moves along the unit sphere and the norm
+    is interpolated linearly.
 
     Directions d_k = a_k / ||a_k|| lie on the unit 2-sphere of span(d_0, d_1, d_2). That sphere is charted by the log
     map at d_0 (azimuthal equidistant chart), so a coordinate w = (u, v) is a tangent vector whose length is the

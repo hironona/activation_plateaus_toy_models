@@ -15,7 +15,7 @@ import math
 
 import sys
 sys.path.append('./train')
-from utils import load_config, load_model_from_checkpoint, get_model_names, get_model_name
+from utils import load_config, find_seed_checkpoints, load_model_from_checkpoint, plot_dir
 from visualize_plateaus import generate_uniform_data
 from visualize_contours import _draw_reference_annotations
 
@@ -116,22 +116,14 @@ def visualize_kl_heatmap(
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Visualize KL divergence of class probabilities from a reference point'
+        description='Visualize KL divergence of class probabilities from a reference point (averaged over seed checkpoints)'
     )
-    parser.add_argument('--model_type', type=str, choices=['toy_resnet'], required=True)
-    parser.add_argument('--data_type', type=str, choices=['class_spiral'], required=True)
-    parser.add_argument('--model_path', type=str,
-                        help='Path to checkpoint file or directory')
-    parser.add_argument('--multi_seed', action='store_true',
-                        help='Average KL across all seed checkpoints')
+    parser.add_argument('--checkpoint_dir', type=str,
+                        help='Override checkpoint_dir from config (run directory, seed directory or .pt file)')
     args = parser.parse_args()
 
-    model_type = args.model_type
-
-    if args.model_path:
-        config['model_names'][model_type] = args.model_path
-    model_paths = get_model_names(config, model_type)
-    MODEL_NAME = get_model_name(config, model_type)
+    checkpoint_dir = args.checkpoint_dir or config['checkpoint_dir']
+    model_paths = find_seed_checkpoints(checkpoint_dir)
 
     N_POINTS        = config['n_points']
     RADIUS          = config['radius']
@@ -150,30 +142,21 @@ def main():
     data = generate_uniform_data(N_POINTS, RADIUS)
     grid_size = int(math.sqrt(N_POINTS))
 
-    output_dir = f"plots/{MODEL_NAME}/kl"
-
-    if args.multi_seed:
-        print(f"Multi-seed mode: {len(model_paths)} seeds")
-        all_kl = []
-        for idx, ckpt in enumerate(model_paths):
-            print(f"  Seed {idx + 1}/{len(model_paths)}: {ckpt}")
-            all_kl.append(compute_kl_for_checkpoint(ckpt, data, REFERENCE_POINT, device))
-        kl = torch.stack(all_kl).mean(dim=0)   # (n_points,)
-        title_prefix = f"KL Divergence of Class Probabilities (mean over {len(model_paths)} seeds)"
-    else:
-        ckpt = model_paths[0]
-        print(f"Checkpoint: {ckpt}")
-        kl = compute_kl_for_checkpoint(ckpt, data, REFERENCE_POINT, device)
-        title_prefix = "KL Divergence of Class Probabilities"
+    print(f"{len(model_paths)} seed checkpoint(s)")
+    all_kl = []
+    for idx, ckpt in enumerate(model_paths):
+        print(f"  Seed {idx + 1}/{len(model_paths)}: {ckpt}")
+        all_kl.append(compute_kl_for_checkpoint(ckpt, data, REFERENCE_POINT, device))
+    kl = torch.stack(all_kl).mean(dim=0)   # (n_points,)
 
     print(f"KL range: [{kl.min():.4g}, {kl.max():.4g}]")
 
     title = (
-        f"{title_prefix}\n"
+        f"KL Divergence of Class Probabilities (mean over {len(model_paths)} seeds)\n"
         f"Ref x*: {REFERENCE_POINT.tolist()} | "
         f"Scale: {'log' if LOG_SCALE else 'linear'}"
     )
-    output_path = (f"{output_dir}/"
+    output_path = (f"{plot_dir(checkpoint_dir)}/kl/"
                    f"kl_ref_{REFERENCE_POINT.tolist()}_{'log' if LOG_SCALE else 'linear'}.png")
 
     visualize_kl_heatmap(

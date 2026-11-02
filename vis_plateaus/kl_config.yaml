@@ -14,5 +14,5 @@ sub_reference_points:
 log_scale: True     # Whether to use log scale for the KL values when coloring the grid
 kl_floor: 1.0e-8    # With log_scale, KL values below this are clipped to it (KL is 0 at the reference point)
 
-model_names:
-  toy_resnet: "checkpoints/class_spiral/ResNetMLP/noise-0.00-multi_seed_5_runs"
+# Run directory (checkpoints/{task}/noise-{std}); results are averaged over every seed-* in it
+checkpoint_dir: "checkpoints/class_spiral/noise-0.00"
