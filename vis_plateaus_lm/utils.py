@@ -206,11 +206,15 @@ def _slug(text: str) -> str:
     return re.sub(r'[^A-Za-z0-9]+', '_', text).strip('_')
 
 
-def construct_filepath(config: Dict, source_layer_idx: int) -> str:
-    """Path of the saved activations/metrics for one source layer. Flat keeps the original (suffix-free) name."""
+def construct_filepath(config: Dict, source_layer_idx: int, kind: str = "") -> str:
+    """
+    Path of the saved activations/metrics for one source layer. Flat keeps the original (suffix-free) name.
+    kind: "" for compute_plane.py's output, or a tag such as "divergence" for other scripts' outputs on the same grid.
+    """
     words = get_anchor_words(config['token_pairs'])
     surface_suffix = "" if config.get('surface', 'flat') == 'flat' else f"_{config['surface']}"
-    filename = f"{_slug(config['prefix'])}__{'_'.join(_slug(w) for w in words)}__layer{source_layer_idx}_res{config['grid_resolution']}{surface_suffix}.pt"
+    kind_suffix = f"_{kind}" if kind else ""
+    filename = f"{_slug(config['prefix'])}__{'_'.join(_slug(w) for w in words)}__layer{source_layer_idx}_res{config['grid_resolution']}{surface_suffix}{kind_suffix}.pt"
     return os.path.join("./activations", config['model_name'], "lm_plane", filename)
 
 

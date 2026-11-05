@@ -4,16 +4,16 @@ model_name: "gpt2-small"  # Loaded via compute_metrics.py:load_model (Transforme
 prepend_bos: False
 
 # Sentences are prefix + " " + word. Each " " + word must be a single GPT-2 token.
-prefix: "The house is"
+prefix: "I"
 token_pairs:
-  - ["large", "big"]
-  - ["large", "in"]
+  - ["am", "like"]
+  - ["am", "really"]
 # The unique words across token_pairs (in order of appearance) are the three anchors of the plane.
 # The plane's origin is the first anchor and its first axis points to the second anchor.
 
 # -1 for the embedding space (embed + pos_embed, i.e. blocks.0.hook_resid_pre), and a non-negative integer k for
 # the output of block k (blocks.k.hook_resid_post). Only the last token position is perturbed.
-source_layer_idx: 6
+source_layer_idx: -1
 
 # Surface through the three anchor activations on which points are sampled.
 #   "flat": affine plane through the three points. Grid coordinates are Euclidean distances.
@@ -21,7 +21,7 @@ source_layer_idx: 6
 #     sphere spanned by the three directions and the norm is interpolated linearly, so the paths from the first anchor
 #     to the other two are exactly their slerp_rescale paths. Grid coordinates are geodesic angles (radians) from the
 #     first anchor's direction.
-surface: "flat"
+surface: "spherical"
 
 # Sampling grid on the surface (a square in its 2D coordinates).
 grid_resolution: 100  # Points per axis (total = grid_resolution ** 2)
@@ -30,7 +30,9 @@ margin: 0.5  # Padding on each side of the anchors' bounding box, as a fraction 
 # Compute
 batch_size: 64  # Grid points per forward/Jacobian batch
 jacobian_chunk_size: 256  # Output dims per vmap chunk in torch.func.jacrev (lower = less memory)
+divergence_batch_size: 256  # Grid points per forward batch in compute_divergence.py (no Jacobians)
 
 # Plot
-log_scale: True  # Color the heat map by log10 of the Frobenius norm
+log_scale: True  # Color the heat maps by log10 of the Frobenius norm (plot_plane.py) and of the KL divergence (plot_divergence.py)
+kl_floor: 1.0e-6  # KL values (nats) below this are clipped before log10 (KL is 0 at the reference anchor)
 max_label_classes: 7  # Most frequent argmax tokens shown individually; the rest are grouped as "other"

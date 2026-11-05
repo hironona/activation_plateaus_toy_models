@@ -67,18 +67,12 @@ def collect_anchor_activations(model, tokens: torch.Tensor, source_layer_idx: in
     return anchors, contexts, logits[:, -1, :]
 
 
-def compute_plane(model, tokens: torch.Tensor, words, config, source_layer_idx: int, device: str) -> dict:
+def sample_surface_grid(anchors: torch.Tensor, words, config, device: str) -> dict:
     """
-    Plane sampling, argmax labeling and Jacobian norms for three tokenized sentences [3, seq_len].
-    Returns the dict saved by main().
+    Surface (plane or slerp-like sphere) through the three anchor activations [3, d], and a grid of samples on it.
+    Returns a dict with 'surface_name', 'surface', 'anchor_coords' [3, 2], 'axis_u' [R], 'axis_v' [R],
+    'samples' [N, d] (float32).
     """
-    n_layers = model.cfg.n_layers
-    assert -1 <= source_layer_idx < n_layers, f"source_layer_idx must be in [-1, {n_layers - 1}], got {source_layer_idx}"
-
-    # 1. Last-token activations of the three sentences in the output space of the source layer
-    anchors, contexts, anchor_logits_full = collect_anchor_activations(model, tokens, source_layer_idx)
-
-    # 2. Surface (plane or slerp-like sphere) through the three activations, and a grid of samples on it
     surface_name = config.get('surface', 'flat')
     surface = build_surface(anchors, surface_name)
     anchor_coords = surface.to_coords(anchors)
@@ -92,6 +86,25 @@ def compute_plane(model, tokens: torch.Tensor, words, config, source_layer_idx: 
     unit = "" if surface_name == 'flat' else " rad"
     print(f"Surface: {surface_name} | Anchor coords: {words[1]} = {anchor_coords[1].tolist()}, {words[2]} = {anchor_coords[2].tolist()} (origin {words[0]})")
     print(f"Grid: {config['grid_resolution']}x{config['grid_resolution']} = {samples.shape[0]} points, side {axis_u[-1] - axis_u[0]:.3f}{unit}")
+    return {'surface_name': surface_name, 'surface': surface, 'anchor_coords': anchor_coords,
+            'axis_u': axis_u, 'axis_v': axis_v, 'samples': samples}
+
+
+def compute_plane(model, tokens: torch.Tensor, words, config, source_layer_idx: int, device: str) -> dict:
+    """
+    Plane sampling, argmax labeling and Jacobian norms for three tokenized sentences [3, seq_len].
+    Returns the dict saved by main().
+    """
+    n_layers = model.cfg.n_layers
+    assert -1 <= source_layer_idx < n_layers, f"source_layer_idx must be in [-1, {n_layers - 1}], got {source_layer_idx}"
+
+    # 1. Last-token activations of the three sentences in the output space of the source layer
+    anchors, contexts, anchor_logits_full = collect_anchor_activations(model, tokens, source_layer_idx)
+
+    # 2. Surface (plane or slerp-like sphere) through the three activations, and a grid of samples on it
+    grid = sample_surface_grid(anchors, words, config, device)
+    surface_name, surface, anchor_coords = grid['surface_name'], grid['surface'], grid['anchor_coords']
+    axis_u, axis_v, samples = grid['axis_u'], grid['axis_v'], grid['samples']
 
     # 3. Label each sample with its argmax next token and compute the Jacobian product norm
     gram_factor = unembed_gram_factor(model).to(device)
