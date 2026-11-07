@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
-Visualize activation plateaus by plotting data points colored by metrics
-(L2 norm, Jacobian determinant, layerwise product of Jacobian determinants).
+Visualize activation plateaus by coloring points by a metric (L2 norm, Jacobian norm or determinant, full or as a
+layerwise product), averaged over seeds.
+
+With the input space as the source (source_layer_idx: -2), the points form a regular grid and the metric is drawn as a
+heat map with the argmax-class boundaries, plus a categorical argmax-class map, as in vis_plateaus_lm/plot_plane.py.
+Other source layers are scatter plots in the (PCA-reduced) activation space with the training data in the background.
 """
 
 from typing import Dict
@@ -11,6 +15,9 @@ import os
 import argparse
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
+import matplotlib.patheffects as pe
+from matplotlib.colors import ListedColormap
+from matplotlib.patches import Patch
 from sklearn.decomposition import PCA
 import math
 
@@ -19,7 +26,9 @@ sys.path.append('./train')
 from utils import load_config, resolve_layer_idx, find_seed_checkpoints, load_model_from_checkpoint, plot_dir, METRIC_LABELS, layer_label, seeds_label
 from compute_metrics import l2_norm_metric, jacobian_determinant_metric, jacobian_determinant_layerwise_prod_metric, jacobian_norm_metric, jacobian_norm_layerwise_prod_metric
 from model import ResNetMLP
-from data import ToyDataset
+from data import ToyDataset, RingMixtureTask
+from plot_style import ANNOTATION_FONTSIZE, SEQUENTIAL_BLUE, CATEGORICAL, OTHER_COLOR, TEXT_PRIMARY, TEXT_SECONDARY, SURFACE
+from plot_maps import pixel_extent, draw_decision_boundaries, draw_region_labels
 
 config = load_config("vis_plateaus/config.yaml")
 
@@ -117,6 +126,7 @@ def visualize_plateau(
     device: str = 'cpu',
     task_config: dict = None,
     mark_reference: bool = False,
+    axis_limit: float = 1.0,
 ):
     """
     Create a scatter plot of data points in source-layer space, colored by metric value,
@@ -136,6 +146,7 @@ def visualize_plateau(
         device: Device string.
         task_config: Task config dict from checkpoint (keys: name, num_classes, noise_std, distribution, etc.).
         mark_reference: Whether to mark the reference point.
+        axis_limit: Half-width of the plotted square when the source space is 2D (the input sampling radius).
     """
     d_source = source_activations.shape[1]
     use_pca = d_source > n_pca_components
@@ -165,7 +176,9 @@ def visualize_plateau(
     noise_std = 0.0
     distribution = 'uniform'
     task_name = 'class_spiral'
+    task_params = None
     if task_config is not None:
+        task_params = task_config.get('ring')
         num_classes = task_config.get('num_classes', 2)
         noise_std = task_config.get('noise_std', 0.0)
         # distribution = task_config.get('distribution', 'uniform')
@@ -177,7 +190,7 @@ def visualize_plateau(
         bg_dataset = ToyDataset(
             task_name=task_name, num_samples=10,
             num_classes=num_classes, noise_std=noise_std,
-            distribution=distribution, seed=42
+            distribution=distribution, seed=42, task_params=task_params
         )
         bg_X = bg_dataset.data   # (2500, 2)
         bg_y = bg_dataset.targets
@@ -264,10 +277,10 @@ def visualize_plateau(
             ax.set_zlabel('dim 3')
     
     if d_source == 2: # If the source space is 2D, assume it is the input space.
-        ax.set_ylim(-1, 1)
-        ax.set_xlim(-1, 1)
+        ax.set_ylim(-axis_limit, axis_limit)
+        ax.set_xlim(-axis_limit, axis_limit)
         if use_3d:
-            ax.set_zlim(-1, 1)
+            ax.set_zlim(-axis_limit, axis_limit)
 
     # --- Class legend (discrete, inside plot) ---
     if bg_legend_handles:
@@ -281,6 +294,139 @@ def visualize_plateau(
     plt.savefig(output_path)
     print(f"Plot saved to: {output_path}")
     plt.close()
+
+def class_probs(logits: torch.Tensor) -> torch.Tensor:
+    """Class probabilities (n, C); a single logit z (binary task) means p(y=1|x) = sigmoid(z) = softmax([0, z])."""
+    logits = logits.float()
+    if logits.shape[1] == 1:
+        logits = torch.cat([torch.zeros_like(logits), logits], dim=1)
+    return torch.softmax(logits, dim=1)
+
+
+def input_grid_axes(data: torch.Tensor):
+    """
+    Axes of the grid from generate_uniform_data, whose point i * G + j is (x1_i, x2_j).
+    Returns (G, axis_u = x1 values, axis_v = x2 values).
+    """
+    G = int(round(math.sqrt(data.shape[0])))
+    assert G * G == data.shape[0], f"Expected a square grid, got {data.shape[0]} points"
+    return G, data[::G, 0].numpy(), data[:G, 1].numpy()
+
+
+def to_image(values, G: int) -> np.ndarray:
+    """(G * G,) values in generate_uniform_data order -> [G, G] image with rows = x2 and columns = x1."""
+    return np.asarray(values).reshape(G, G).T
+
+
+def ring_task(task_config):
+    """RingMixtureTask of a class_ring_mixture checkpoint (None for other tasks)."""
+    if task_config is None or task_config.get('name') != 'class_ring_mixture':
+        return None
+    return RingMixtureTask(task_config['num_classes'], task_config.get('ring'))
+
+
+def draw_ring_overlay(ax, ring, axis_u, axis_v, density_levels=(0.1, 0.01)):
+    """Dotted input-density contours (fractions of the peak) and the labeled anchors (Gaussian means)."""
+    uu, vv = np.meshgrid(axis_u, axis_v)
+    density = ring.density(np.stack([uu.ravel(), vv.ravel()], axis=1)).reshape(uu.shape)
+    ax.contour(axis_u, axis_v, density, levels=sorted(density.max() * np.asarray(density_levels)),
+               colors=TEXT_SECONDARY, linewidths=0.8, linestyles=':', alpha=0.8)
+    ax.scatter(ring.means[:, 0], ring.means[:, 1], s=60, marker='o', facecolor=TEXT_PRIMARY, edgecolor=SURFACE,
+               linewidth=2, zorder=5)
+    for name, (x, y) in zip(ring.names, ring.means):
+        ax.annotate(name, (x, y), xytext=(7, 7), textcoords='offset points', fontsize=ANNOTATION_FONTSIZE + 2,
+                    fontweight='bold', color=TEXT_PRIMARY, path_effects=[pe.withStroke(linewidth=3, foreground=SURFACE)],
+                    zorder=6)
+
+
+def style_input_axes(ax, axis_u, axis_v):
+    ax.set_aspect('equal')
+    ax.set_xlim(axis_u[0], axis_u[-1])
+    ax.set_ylim(axis_v[0], axis_v[-1])
+    ax.set_xlabel('x₁', color=TEXT_SECONDARY)
+    ax.set_ylabel('x₂', color=TEXT_SECONDARY)
+    ax.tick_params(colors=TEXT_SECONDARY, labelsize=10)
+    for spine in ax.spines.values():
+        spine.set_color(OTHER_COLOR)
+
+
+def class_color(c: int) -> str:
+    return CATEGORICAL[c] if c < len(CATEGORICAL) else OTHER_COLOR
+
+
+def plot_input_heatmap(data, metric_values, mean_class_probs, output_path, colorbar_label, title, subtitle,
+                       log_scale=True, task_config=None, reference_point=None):
+    """
+    Heat map of a metric on the input grid (seed mean), with the boundaries of the argmax class of the seed-mean
+    class probabilities, as in vis_plateaus_lm/plot_plane.py. class_ring_mixture runs also get the anchors and
+    input-density contours.
+    """
+    G, axis_u, axis_v = input_grid_axes(data)
+    values = to_image(metric_values.numpy(), G)
+    if log_scale:
+        values = np.log10(values + 1e-12)  # Small constant to avoid log(0)
+    label_grid = to_image(mean_class_probs.argmax(dim=1).numpy(), G)
+
+    fig, ax = plt.subplots(figsize=(8, 7), facecolor=SURFACE)
+    im = ax.imshow(values, origin='lower', extent=pixel_extent(axis_u, axis_v), cmap=SEQUENTIAL_BLUE,
+                   interpolation='nearest')
+    ring = ring_task(task_config)
+    if ring is not None:
+        draw_ring_overlay(ax, ring, axis_u, axis_v)
+    draw_decision_boundaries(ax, axis_u, axis_v, label_grid)
+    if ring is None:  # Ring runs are identified by their labeled anchors instead
+        labels = np.unique(label_grid)
+        draw_region_labels(ax, axis_u, axis_v, label_grid, {c: f"class {c}" for c in labels}, labels)
+    if reference_point is not None:
+        ax.scatter([reference_point[0]], [reference_point[1]], s=320, marker='o', facecolor='none',
+                   edgecolor=CATEGORICAL[1], linewidth=2.5, zorder=6)
+    style_input_axes(ax, axis_u, axis_v)
+
+    cbar = fig.colorbar(im, ax=ax, shrink=0.8)
+    cbar.set_label((r"$\log_{10}$ " if log_scale else "") + colorbar_label, color=TEXT_SECONDARY)
+    cbar.ax.tick_params(colors=TEXT_SECONDARY, labelsize=8)
+    cbar.outline.set_visible(False)
+    ax.set_title(title, color=TEXT_PRIMARY, fontsize=13)
+    fig.suptitle(subtitle, color=TEXT_SECONDARY, fontsize=12)
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path, dpi=200, facecolor=SURFACE)
+    plt.close(fig)
+    print(f"Plot saved to: {output_path}")
+
+
+def plot_input_label_map(data, mean_class_probs, output_path, subtitle, task_config=None):
+    """Argmax class of the seed-mean class probabilities on the input grid, as in vis_plateaus_lm/plot_plane.py."""
+    G, axis_u, axis_v = input_grid_axes(data)
+    n_classes = mean_class_probs.shape[1]
+    label_grid = to_image(mean_class_probs.argmax(dim=1).numpy(), G)
+    colors = [class_color(c) for c in range(n_classes)]
+
+    fig, ax = plt.subplots(figsize=(8, 7), facecolor=SURFACE)
+    ax.imshow(label_grid, origin='lower', extent=pixel_extent(axis_u, axis_v), cmap=ListedColormap(colors),
+              vmin=-0.5, vmax=n_classes - 0.5, interpolation='nearest')
+    ring = ring_task(task_config)
+    if ring is not None:
+        draw_ring_overlay(ax, ring, axis_u, axis_v)
+    draw_decision_boundaries(ax, axis_u, axis_v, label_grid, color=SURFACE, outline=SURFACE)
+    style_input_axes(ax, axis_u, axis_v)
+
+    handles = [Patch(facecolor=class_color(c), label=f"class {c}  ({(label_grid == c).mean():.0%})")
+               for c in range(min(n_classes, len(CATEGORICAL)))]
+    if n_classes > len(CATEGORICAL):
+        handles.append(Patch(facecolor=OTHER_COLOR, label=f"classes {len(CATEGORICAL)}–{n_classes - 1}  "
+                                                         f"({(label_grid >= len(CATEGORICAL)).mean():.0%})"))
+    if ring is not None:
+        handles.append(mlines.Line2D([], [], color=TEXT_SECONDARY, linestyle=':', label="input density (0.1, 0.01 × peak)"))
+    ax.legend(handles=handles, title="argmax class", loc='upper left', bbox_to_anchor=(1.02, 1), frameon=False,
+              labelcolor=TEXT_PRIMARY)
+    ax.set_title("Argmax class on the input plane", color=TEXT_PRIMARY)
+    fig.suptitle(subtitle, color=TEXT_SECONDARY, fontsize=12)
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=200, facecolor=SURFACE, bbox_inches='tight')
+    plt.close(fig)
+    print(f"Plot saved to: {output_path}")
+
 
 def compute_metric_for_checkpoint(
     checkpoint_path: str,
@@ -364,13 +510,15 @@ def compute_metric_for_checkpoint(
 def main():
     parser = argparse.ArgumentParser(description='Visualize activation plateaus (metric averaged over seed checkpoints)')
     parser.add_argument('--checkpoint_dir', type=str, help='Override checkpoint_dir from config (run directory, seed directory or .pt file)')
+    parser.add_argument('--radius', type=float, help='Override radius from config (input grid spans [-radius, radius]^2)')
+    parser.add_argument('--n_points', type=int, help='Override n_points from config (sqrt(n_points) grid points per input dim)')
     args = parser.parse_args()
 
     checkpoint_dir = args.checkpoint_dir or config['checkpoint_dir']
     model_paths = find_seed_checkpoints(checkpoint_dir)
 
-    N_POINTS = config['n_points']
-    RADIUS = config['radius']
+    N_POINTS = args.n_points if args.n_points is not None else config['n_points']
+    RADIUS = args.radius if args.radius is not None else config['radius']
     REFERENCE_POINT = torch.tensor(config['reference_point'])
     METRIC = config['metric']
     SOURCE_LAYER_IDX_RAW = config['source_layer_idx']
@@ -392,6 +540,7 @@ def main():
 
     print(f"{len(model_paths)} seed checkpoint(s) | METRIC: {METRIC}")
     all_metric_values = []
+    all_class_probs = []
     first_seed_result = None
     for idx, checkpoint_path in enumerate(model_paths):
         print(f"  Seed {idx + 1}/{len(model_paths)}: {checkpoint_path}")
@@ -400,11 +549,14 @@ def main():
             source_layer_idx, target_layer_idx, device,
         )
         all_metric_values.append(result['metric_values'])
+        with torch.no_grad():
+            all_class_probs.append(class_probs(result['model'](data.to(device))).cpu())
         if first_seed_result is None:
             first_seed_result = result
 
     # Average metric values across seeds; use the first seed's spatial layout for plotting
     metric_values = torch.stack(all_metric_values).mean(dim=0)  # (n_points,)
+    mean_class_probs = torch.stack(all_class_probs).mean(dim=0)  # (n_points, C)
     n_seeds = len(model_paths)
     source_activations = first_seed_result['source_activations']
     ref_source_act = first_seed_result['ref_source_act']
@@ -416,6 +568,22 @@ def main():
         print(f"Reference point {REFERENCE_POINT.tolist()}: predicted class {first_seed_result['predicted_class']}")
 
     output_path = f"{plot_dir(checkpoint_dir)}/plateaus/{METRIC}_src-{SOURCE_LAYER_IDX_RAW}_tgt-{TARGET_LAYER_IDX_RAW}.png"
+
+    if source_layer_idx == -2:
+        # Input space: the points form a regular grid, so draw heat maps as in vis_plateaus_lm/plot_plane.py
+        print(f"Loaded model on {device} (task config: {task_config})")
+        heatmap_title = f"{METRIC_LABELS[METRIC]}, {layer_label(source_layer_idx)} → {layer_label(target_layer_idx)}"
+        subtitle = f"{os.path.relpath(os.path.normpath(checkpoint_dir), 'checkpoints')} · {seeds_label(n_seeds)}"
+        plot_input_heatmap(
+            data, metric_values, mean_class_probs, output_path,
+            colorbar_label=METRIC_LABELS[METRIC],
+            title=f"{heatmap_title}, with argmax-class boundaries", subtitle=subtitle, log_scale=LOG_SCALE,
+            task_config=task_config, reference_point=REFERENCE_POINT if METRIC == 'l2_norm' else None,
+        )
+        label_map_path = os.path.join(os.path.dirname(output_path), "argmax_labels.png")
+        plot_input_label_map(data, mean_class_probs, label_map_path, subtitle=subtitle, task_config=task_config)
+        print("\n=== Complete ===")
+        return
 
     metric_label = METRIC_LABELS[METRIC]
     if LOG_SCALE:
@@ -437,6 +605,7 @@ def main():
         device=device,
         task_config=task_config,
         mark_reference=(METRIC == 'l2_norm'),
+        axis_limit=RADIUS,
     )
 
     print("\n=== Complete ===")

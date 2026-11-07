@@ -1,0 +1,17 @@
+# KL divergence and argmax surprisal w.r.t. each anchor for models trained on class_ring_mixture
+# (visualize_ring_divergence.py). The anchors are the Gaussian means; P_a is the model's class distribution at anchor a.
+
+# Run directory (checkpoints/{task}/noise-{std}[-{run_tag}]); the final epoch of every seed-* is used
+checkpoint_dir: "checkpoints/class_ring_mixture/noise-0.00"
+
+# Input-plane grid: grid_resolution x grid_resolution points on [-lim, lim]^2
+grid_resolution: 300
+lim: 2.0
+
+# Arc profiles: the metrics along a circle around the origin (null = the ring radius the model was trained with)
+arc_radius: null
+arc_points: 721
+
+log_scale: True    # Color the KL maps (and the KL arc profiles) by log10
+kl_floor: 1.0e-4   # KL values (nats) below this are clipped before log10 (KL is 0 at the reference anchor)
+density_levels: [0.1, 0.01]  # Dotted contours of the input density at these fractions of its peak (empty = none)

@@ -77,7 +77,10 @@ def train_single_model(config: dict, seed: int, checkpoint_dir: str):
     num_classes = config['task']['num_classes']
     distribution = config['task']['distribution']
     shuffle_per_epoch = config['task']['shuffle_per_epoch']
-    dataset = ToyDataset(task_name, num_samples, noise_std, num_classes, distribution, seed=seed)
+    dataset = ToyDataset(task_name, num_samples, noise_std, num_classes, distribution, seed=seed,
+                         task_params=config['task'].get('ring'))
+    if dataset.ring is not None:
+        dataset.ring.print_stats()
 
     # Train/val split
     val_split = config['training'].get('val_split', 0.2)

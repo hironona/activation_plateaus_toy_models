@@ -1,0 +1,27 @@
+# Error-correcting attractor fields for the toy ResNet (visualize_attractors.py); definitions in common/attractors.py.
+
+# Run directory (checkpoints/{task}/noise-{std}[-{run_tag}]); the final epoch of every seed-* is used
+checkpoint_dir: "checkpoints/class_ring_mixture/noise-0.00"
+
+# Source space of the gradient fields:
+#   -2: the 2D input plane itself (grid on [-lim, lim]^2); trajectories then start at the embedding of the grid
+#   -1 (embedding) or k (output of block k): the plane through the frame anchors' activations at that layer
+source_layer_idx: -2
+
+# Anchors as input points with names. null = the Gaussian means A, B, C, ... of a class_ring_mixture run.
+anchor_points: null
+anchor_names: null
+# Three anchors spanning the trajectory frame (and the source plane when source_layer_idx >= -1)
+frame_anchors: ["A", "B", "D"]
+
+grid_resolution: 100
+lim: 2.0      # source_layer_idx = -2: the grid spans [-lim, lim]^2
+margin: 0.5   # source_layer_idx >= -1: padding around the anchors' bounding box, as a fraction of its larger side
+
+arrow_stride: 5        # One gradient arrow every arrow_stride grid points per axis
+trajectory_stride: 10  # One trajectory every trajectory_stride grid points per axis
+batch_size: 2048       # Grid points per forward-mode Jacobian batch
+
+# Seeds (positions in the run directory, 0 = first) to draw the maps for; "all" for every seed.
+# The convergence curves always use every seed.
+map_seeds: [0]

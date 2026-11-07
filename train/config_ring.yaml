@@ -1,0 +1,46 @@
+model:
+  input_dim: 2
+  output_dim: 4 # must match task.num_classes
+  hidden_dim: 16
+  resblock_width: 16
+  num_blocks: 10
+  dropout: 0.0
+
+training:
+  batch_size: 64
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  epochs: 200
+  save_every: 100
+  seed: 0     # First seed; seeds seed, seed+1, ..., seed+n_seeds-1 are trained
+  n_seeds: 5
+  # Checkpoints go to {checkpoint_root}/{task.name}/noise-{task.noise_std}[-{run_tag}]/seed-{k}/
+  checkpoint_root: "checkpoints"
+  run_tag: null  # Tell apart ring variants here, e.g. "sigma0.2" or "ab-soft"
+  val_split: 0.1 # fraction of data used for validation
+  lr_scheduler: "cosine" # Options: "cosine", "none"
+
+task:
+  name: "class_ring_mixture"
+  num_samples: 20000
+  noise_std: 0.0  # Must be 0 for this task; the input spread is ring.sigmas
+  num_classes: 4  # >= number of anchors; extra classes are fillers that are no anchor's argmax
+  distribution: "normal"  # Unused by this task
+  shuffle_per_epoch: True
+  # Anchors A, B, C, D in the order of angles_deg. Boundary i lies between anchor i and anchor i+1 (cyclic):
+  # transition_widths = [A|B, B|C, C|D, D|A]. Missing keys fall back to data.py:RING_DEFAULTS.
+  ring:
+    radius: 1.0
+    angles_deg: [0, 90, 180, 270]  # strictly increasing in [0, 360)
+    sigmas: [0.4, 0.4, 0.4, 0.4]  # input density only; the boundary midpoint is 0.71 from the two means
+    weights: [0.25, 0.25, 0.25, 0.25]  # mixing weights (normalized)
+    label_dists:  # P(y | anchor), num_classes entries each, strictly positive, distinct argmax per anchor
+      - [0.86, 0.04, 0.05, 0.05]  # A
+      - [0.20, 0.70, 0.05, 0.05]  # B
+      - [0.24, 0.24, 0.28, 0.24]  # C
+      - [0.05, 0.04, 0.05, 0.86]  # D
+    # Fraction of the arc between adjacent anchors over which the label distribution changes, in [0, 1].
+    # 0 = hard step at the bisector (nearest-anchor labels); 1 = linear ramp from one anchor to the next.
+    transition_widths: [0.0, 0.0, 0.0, 1.0]
+    interp_space: "prob"  # "prob": mix probabilities; "logit": mix log-probabilities (geometric mixture)
+    targets: "sample"  # "sample": one-hot y ~ P(y|x) (LM-like); "soft": the full P(y|x) as the target

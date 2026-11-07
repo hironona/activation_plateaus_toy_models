@@ -3,6 +3,7 @@ Shared matplotlib style and short labels for all plots. Importing this module ap
 """
 
 import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
 
 plt.rcParams.update({
     'font.size': 14,
@@ -16,6 +17,15 @@ plt.rcParams.update({
     'savefig.dpi': 300,
     'savefig.bbox': 'tight',
 })
+
+# Shared palette: a sequential ramp (one hue, light -> dark), categorical slots in fixed order, and neutrals
+SEQUENTIAL_BLUE = LinearSegmentedColormap.from_list('seq_blue', [
+    '#cde2fb', '#9ec5f4', '#6da7ec', '#3987e5', '#256abf', '#184f95', '#0d366b'])
+CATEGORICAL = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948']
+OTHER_COLOR = '#c9c8c3'
+TEXT_PRIMARY = '#0b0b0b'
+TEXT_SECONDARY = '#52514e'
+SURFACE = '#fcfcfb'
 
 # Font size for small in-plot annotations (contour labels, point coordinates)
 ANNOTATION_FONTSIZE = 11
