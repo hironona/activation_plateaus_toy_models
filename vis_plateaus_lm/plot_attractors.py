@@ -6,6 +6,7 @@ Plot the results of compute_attractors.py (no model needed):
     3. Top singular direction of the log-probability Jacobian (sign-free segments)
     4. Residual-stream trajectories through the blocks in anchor-relative coordinates, over the basins of the final
        argmax token; one panel per block with its update; median convergence curves
+    5. Boundary zooms from compute_attractor_zoom.py, when its "_attractors_zoom" file exists
 The heat maps show magnitudes (log10) and the arrows only directions; the argmax-token boundaries and the anchors are
 overlaid as in plot_plane.py.
 
@@ -93,6 +94,19 @@ def main():
     ap.plot_maxnorm_gradient(fields, os.path.join(plot_dir, f"{stem}_grad_maxnorm_row.png"), arrow_stride,
                              config['max_label_classes'])
     ap.plot_singular_direction(fields, os.path.join(plot_dir, f"{stem}_grad_top_singular.png"), arrow_stride)
+    zoom_path = input_path.replace("_attractors.pt", "_attractors_zoom.pt")
+    if os.path.exists(zoom_path):
+        zoom = torch.load(zoom_path, weights_only=True)
+        print(f"Loaded: {zoom_path}")
+        for i, s in zoom['label_strings'].items():
+            label_text.setdefault(i, repr(s) if s.isascii() else ascii(s))
+        windows = [{key: value.numpy() if torch.is_tensor(value) else value for key, value in w.items()}
+                   for w in zoom['windows']]
+        if windows:
+            ap.plot_boundary_zoom(fields, windows, os.path.join(plot_dir, f"{stem}_grad_boundary_zoom.png"),
+                                  config['zoom_arrow_stride'], config['max_label_classes'])
+    else:
+        print(f"No boundary zooms ({zoom_path} not found; run compute_attractor_zoom.py)")
     ap.plot_trajectories(traj, os.path.join(plot_dir, f"{stem}_trajectories.png"), traj_stride)
     ap.plot_block_updates(traj, os.path.join(plot_dir, f"{stem}_block_updates.png"), traj_stride)
 

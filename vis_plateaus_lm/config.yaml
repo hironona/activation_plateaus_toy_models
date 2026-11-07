@@ -39,3 +39,10 @@ kl_floor: 1.0e-6  # KL values (nats) below this are clipped before log10 (KL is 
 max_label_classes: 7  # Most frequent argmax tokens shown individually; the rest are grouped as "other"
 arrow_stride: 3  # plot_attractors.py: one gradient arrow every arrow_stride grid points per axis
 trajectory_stride: 10  # plot_attractors.py: one trajectory every trajectory_stride grid points per axis
+
+# Boundary zooms (compute_attractor_zoom.py): the gradient fields recomputed on a finer grid in square windows on the
+# argmax decision boundaries of compute_attractors.py's grid between each pair of the three sentences' argmax tokens
+zoom_center_mode: median  # Window center on each boundary: median (its middle) or peak (largest max-norm gradient)
+zoom_half_width: 0.12  # Half side of a window, as a fraction of the grid's larger span
+zoom_resolution: 80  # Points per axis of a window's grid
+zoom_arrow_stride: 2  # plot_attractors.py: one arrow every zoom_arrow_stride window grid points per axis

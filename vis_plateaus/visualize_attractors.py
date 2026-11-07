@@ -5,6 +5,8 @@ plot_attractors.py; definitions in common/attractors.py):
     1. Gradient-based: the in-surface Jacobian of the class log-probabilities, pooled into the gradient of each anchor's
        argmax log-probability, the max-norm row and the top singular direction. The source surface is the 2D input
        plane (source_layer_idx -2) or the plane through the frame anchors' activations at a hidden layer.
+       Boundary zooms: the fields recomputed on finer local grids in windows on the decision boundaries between
+       adjacent anchors' classes (A|B, B|C, ...), with the gradients of both classes' log-probabilities.
     2. Block-based: the residual stream of each grid point at every layer from the embedding (or the hidden source
        layer) on, in anchor-relative coordinates of the plane through the frame anchors' activations at that layer.
 Maps are drawn per seed (map_seeds); the convergence curves are the mean over all seeds with 95% CIs.
@@ -26,7 +28,8 @@ sys.path.append('./common')
 from utils import load_config, find_seed_checkpoints, load_model_from_checkpoint, plot_dir
 from plot_style import layer_label, TEXT_SECONDARY
 from surfaces import FlatSurface, make_plane_grid, grid_coords
-from attractors import jvp_columns, surface_metric, pooled_gradient_fields, check_logit_rows, trajectory_coords
+from attractors import (jvp_columns, surface_metric, pooled_gradient_fields, check_logit_rows, trajectory_coords,
+                        anchor_class_pairs, boundary_windows, fill_zoom_windows)
 import attractor_plots as ap
 from data import RingMixtureTask
 
@@ -122,7 +125,19 @@ def compute_seed(model, config, anchor_points, anchor_names, source_layer_idx):
         'anchor_labels': anchor_labels.tolist(), 'layers': list(range(traj_start, n_blocks)),
         'n_classes': logits.shape[1],
     })
-    return results
+    return results, (logits_fn, to_ambient)
+
+
+def compute_zoom(res, chart, config):
+    """Windows on the boundaries between anchor pairs' classes, with the gradient fields on finer local grids."""
+    R = len(res['axis_u'])
+    pairs = anchor_class_pairs(res['anchor_labels'], config['zoom_pairs'])
+    windows = boundary_windows(res['axis_u'], res['axis_v'], res['labels'].reshape(R, R),
+                               res['maxnorm_norms'].reshape(R, R), pairs, res['anchor_labels'],
+                               config['zoom_half_width'], center_mode=config.get('zoom_center_mode', 'median'))
+    logits_fn, to_ambient = chart
+    return fill_zoom_windows(logits_fn, to_ambient, windows, config['zoom_resolution'],
+                             torch.tensor(res['anchor_labels']), config['batch_size'])
 
 
 def density_overlay(task_config, source_layer_idx):
@@ -142,7 +157,7 @@ def density_overlay(task_config, source_layer_idx):
     return overlay
 
 
-def plot_seed(res, config, anchor_names, source_layer_idx, overlay, out_dir, subtitle):
+def plot_seed(res, config, anchor_names, source_layer_idx, overlay, out_dir, subtitle, windows=None):
     R = len(res['axis_u'])
     C = res['n_classes']
     label_text = {c: f"class {c}" for c in range(C)}
@@ -175,6 +190,9 @@ def plot_seed(res, config, anchor_names, source_layer_idx, overlay, out_dir, sub
     ap.plot_anchor_gradients(fields, os.path.join(out_dir, "grad_anchor_logprob.png"), stride)
     ap.plot_maxnorm_gradient(fields, os.path.join(out_dir, "grad_maxnorm_row.png"), stride, max_label_classes=C)
     ap.plot_singular_direction(fields, os.path.join(out_dir, "grad_top_singular.png"), stride)
+    if windows:
+        ap.plot_boundary_zoom(fields, windows, os.path.join(out_dir, "grad_boundary_zoom.png"),
+                              config['zoom_arrow_stride'], max_label_classes=C)
     ap.plot_trajectories(traj, os.path.join(out_dir, "trajectories.png"), traj_stride)
     ap.plot_block_updates(traj, os.path.join(out_dir, "block_updates.png"), traj_stride)
 
@@ -204,14 +222,19 @@ def main():
         anchor_points, anchor_names = resolve_anchors(config, task_config)
         seed_name = os.path.basename(os.path.dirname(ckpt))
         print(f"Seed {idx + 1}/{len(checkpoints)}: {ckpt}")
-        res = compute_seed(model, config, anchor_points, anchor_names, source_layer_idx)
+        res, chart = compute_seed(model, config, anchor_points, anchor_names, source_layer_idx)
         layer_names = [layer_label(k) for k in res['layers']]
         for key in per_seed_curves:
             per_seed_curves[key].append(np.median(res[key], axis=1))
         if idx in map_seeds:
             subtitle = f"{run_label} · {seed_name} · source: {layer_label(source_layer_idx)} · frame {'/'.join(config['frame_anchors'])}"
+            windows = compute_zoom(res, chart, config) if config.get('zoom_pairs', 'none') != 'none' else None
+            for w in windows or []:
+                i, j = w['anchors']
+                print(f"  zoom window {anchor_names[i]}|{anchor_names[j]} (classes {w['pair']}): center "
+                      f"({w['center'][0]:.3f}, {w['center'][1]:.3f}){'' if w['shared_boundary'] else ', no shared boundary'}")
             plot_seed(res, config, anchor_names, source_layer_idx, density_overlay(task_config, source_layer_idx),
-                      os.path.join(out_root, seed_name), subtitle)
+                      os.path.join(out_root, seed_name), subtitle, windows)
 
     n = len(checkpoints)
     series = {}

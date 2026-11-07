@@ -18,9 +18,17 @@ grid_resolution: 100
 lim: 2.0      # source_layer_idx = -2: the grid spans [-lim, lim]^2
 margin: 0.5   # source_layer_idx >= -1: padding around the anchors' bounding box, as a fraction of its larger side
 
-arrow_stride: 3        # One gradient arrow every arrow_stride grid points per axis
+arrow_stride: 2        # One gradient arrow every arrow_stride grid points per axis
 trajectory_stride: 10  # One trajectory every trajectory_stride grid points per axis
 batch_size: 2048       # Grid points per forward-mode Jacobian batch
+
+# Boundary zooms (grad_boundary_zoom.png): the gradient fields recomputed on a finer grid in square windows on the
+# decision boundaries (of the grid above) between anchor pairs' argmax classes
+zoom_pairs: adjacent     # adjacent (consecutive anchors, cyclically: A|B, B|C, C|D, D|A), all (every pair) or none
+zoom_center_mode: median # Window center on each boundary: median (its middle) or peak (largest max-norm gradient)
+zoom_half_width: 0.12    # Half side of a window, as a fraction of the grid's larger span
+zoom_resolution: 80      # Points per axis of a window's grid
+zoom_arrow_stride: 2     # One arrow every zoom_arrow_stride window grid points per axis
 
 # Seeds (positions in the run directory, 0 = first) to draw the maps for; "all" for every seed.
 # The convergence curves always use every seed.
