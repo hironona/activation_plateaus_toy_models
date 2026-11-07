@@ -37,5 +37,5 @@ attractor_batch_size: 32  # Grid points per batch in compute_attractors.py (two 
 log_scale: True  # Color the heat maps by log10 of the Frobenius norm (plot_plane.py) and of the KL divergence (plot_divergence.py)
 kl_floor: 1.0e-6  # KL values (nats) below this are clipped before log10 (KL is 0 at the reference anchor)
 max_label_classes: 7  # Most frequent argmax tokens shown individually; the rest are grouped as "other"
-arrow_stride: 5  # plot_attractors.py: one gradient arrow every arrow_stride grid points per axis
+arrow_stride: 3  # plot_attractors.py: one gradient arrow every arrow_stride grid points per axis
 trajectory_stride: 10  # plot_attractors.py: one trajectory every trajectory_stride grid points per axis

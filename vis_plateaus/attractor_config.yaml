@@ -18,7 +18,7 @@ grid_resolution: 100
 lim: 2.0      # source_layer_idx = -2: the grid spans [-lim, lim]^2
 margin: 0.5   # source_layer_idx >= -1: padding around the anchors' bounding box, as a fraction of its larger side
 
-arrow_stride: 5        # One gradient arrow every arrow_stride grid points per axis
+arrow_stride: 3        # One gradient arrow every arrow_stride grid points per axis
 trajectory_stride: 10  # One trajectory every trajectory_stride grid points per axis
 batch_size: 2048       # Grid points per forward-mode Jacobian batch
 

@@ -132,9 +132,9 @@ def density_overlay(task_config, source_layer_idx):
     ring = RingMixtureTask(task_config['num_classes'], task_config.get('ring'))
 
     def overlay(ax):
-        # Called right after the heat map is drawn, so its extent is the grid's
-        axis_u = np.linspace(*ax.images[0].get_extent()[:2], 200)
-        axis_v = np.linspace(*ax.images[0].get_extent()[2:], 200)
+        # Called after the panel's limits are set to the grid
+        axis_u = np.linspace(*ax.get_xlim(), 200)
+        axis_v = np.linspace(*ax.get_ylim(), 200)
         uu, vv = np.meshgrid(axis_u, axis_v)
         density = ring.density(np.stack([uu.ravel(), vv.ravel()], axis=1)).reshape(uu.shape)
         ax.contour(axis_u, axis_v, density, levels=sorted(density.max() * np.array([0.1, 0.01])), colors=TEXT_SECONDARY,

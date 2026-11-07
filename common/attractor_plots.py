@@ -19,6 +19,8 @@ Trajectory figures take a dict with
     coords [n_layers, N, 2]          anchor-relative coordinates of every grid point at every layer
     off_plane, nearest_dist [n_layers, N]
     final_labels [N], label_text, shown_labels
+Gradient arrows carry no heat map: their direction is the field's and their length is affine in log10 of its magnitude
+(key beside the panels).
 """
 
 import numpy as np
@@ -31,7 +33,7 @@ from matplotlib.colors import ListedColormap, to_rgb
 from matplotlib.patches import Patch
 from matplotlib.lines import Line2D
 
-from plot_style import (ANNOTATION_FONTSIZE, SEQUENTIAL_BLUE, CATEGORICAL, OTHER_COLOR, TEXT_PRIMARY, TEXT_SECONDARY,
+from plot_style import (ANNOTATION_FONTSIZE, CATEGORICAL, OTHER_COLOR, TEXT_PRIMARY, TEXT_SECONDARY,
                         SURFACE)
 from plot_maps import pixel_extent, draw_decision_boundaries
 
@@ -71,26 +73,58 @@ def subsample_index(resolution: int, stride: int) -> np.ndarray:
     return np.arange(offset, resolution, stride)
 
 
-def draw_field_arrows(ax, axis_u, axis_v, vectors, stride, headless=False):
-    """Unit-length arrows (direction only) on every stride-th grid point; magnitudes are shown by the heat map."""
+MIN_ARROW_FRACTION = 0.25  # The weakest arrows keep this fraction of the full length, so their direction stays visible
+
+
+def log_length_range(norms):
+    """(lo, hi) log10 magnitudes mapped to the shortest and longest arrows: the 5th percentile and the maximum."""
+    values = log10(norms)
+    return float(np.percentile(values, 5)), float(values.max())
+
+
+def arrow_length(log_values, log_range, max_length):
+    """Length affine in log10 magnitude: lo -> MIN_ARROW_FRACTION * max_length, hi -> max_length (clipped)."""
+    lo, hi = log_range
+    frac = np.clip((np.asarray(log_values) - lo) / max(hi - lo, 1e-12), 0, 1)
+    return max_length * (MIN_ARROW_FRACTION + (1 - MIN_ARROW_FRACTION) * frac)
+
+
+def max_arrow_length(axis_u, stride):
+    return 0.95 * stride * (axis_u[1] - axis_u[0])
+
+
+def draw_field_arrows(ax, axis_u, axis_v, vectors, norms, stride, log_range, colors=None, headless=False):
+    """
+    Arrows (no edges) on every stride-th grid point along the field, with length affine in log10 of its magnitude.
+    colors: [R, R] array of arrow colors (default: dark ink). Returns the quiver (for the length key).
+    """
     idx = subsample_index(len(axis_u), stride)
     uu, vv = np.meshgrid(axis_u[idx], axis_v[idx])
     vec = vectors[np.ix_(idx, idx)]  # [r, c, 2]
     norm = np.linalg.norm(vec, axis=-1, keepdims=True)
     unit = np.where(norm > 0, vec / np.where(norm > 0, norm, 1), 0)
-    length = 0.8 * stride * (axis_u[1] - axis_u[0])
-    style = dict(angles='xy', scale_units='xy', scale=1, color=SURFACE, edgecolor=TEXT_PRIMARY, linewidth=0.4,
-                 width=0.0035, zorder=4)
+    length = arrow_length(log10(norms[np.ix_(idx, idx)]), log_range, max_arrow_length(axis_u, stride))[..., None]
+    style = dict(angles='xy', scale_units='xy', scale=1, linewidth=0, pivot='middle', width=0.0032, zorder=4)
     if headless:
-        style.update(headwidth=0, headlength=0, headaxislength=0, pivot='middle', width=0.003)
+        style.update(headwidth=0, headlength=0, headaxislength=0)
     else:
-        style.update(headwidth=4, headlength=4, headaxislength=3.5, pivot='middle')
-    ax.quiver(uu, vv, unit[..., 0] * length, unit[..., 1] * length, **style)
+        style.update(headwidth=3.2, headlength=3.6, headaxislength=3.2)
+    color = TEXT_PRIMARY if colors is None else colors[np.ix_(idx, idx)].ravel()
+    return ax.quiver(uu, vv, (unit * length)[..., 0], (unit * length)[..., 1], color=color, **style)
+
+
+def add_length_key(ax, quiver, log_range, max_length, title, x=1.05):
+    """Reference arrows for the low, middle and high ends of the log10 magnitude range, right of the axes."""
+    ax.text(x - 0.03, 1.0, title, transform=ax.transAxes, ha='left', va='bottom', fontsize=9, color=TEXT_SECONDARY)
+    for i, value in enumerate(np.linspace(*log_range, 3)[::-1]):
+        ax.quiverkey(quiver, x, 0.93 - 0.08 * i, float(arrow_length(value, log_range, max_length)),
+                     f"$10^{{{value:.1f}}}$", labelpos='E', coordinates='axes', color=TEXT_PRIMARY,
+                     labelcolor=TEXT_SECONDARY, fontproperties={'size': 9})
 
 
 def draw_anchor_points(ax, coords, names, reference=None, marker='o'):
-    ax.scatter(coords[:, 0], coords[:, 1], s=60 if marker == 'o' else 180, marker=marker, facecolor=TEXT_PRIMARY, edgecolor=SURFACE, linewidth=2,
-               zorder=6)
+    ax.scatter(coords[:, 0], coords[:, 1], s=60 if marker == 'o' else 180, marker=marker, facecolor=TEXT_PRIMARY,
+               edgecolor=SURFACE, linewidth=2, zorder=6)
     # Each label sits on the side facing away from the anchors' centroid, so nearby anchors' labels do not collide
     centroid = coords.mean(axis=0)
     for name, (u, v) in zip(names, coords):
@@ -116,29 +150,26 @@ def style_axes(ax, xlabel=None, ylabel=None):
         spine.set_color(OTHER_COLOR)
 
 
-def add_colorbar(fig, im, axes, label):
-    cbar = fig.colorbar(im, ax=axes, shrink=0.8, pad=0.02)
-    cbar.set_label(label, color=TEXT_SECONDARY)
-    cbar.ax.tick_params(colors=TEXT_SECONDARY, labelsize=9)
-    cbar.outline.set_visible(False)
-
-
 def log10(values, floor=1e-12):
     return np.log10(np.maximum(values, floor))
 
 
-def heatmap_panel(ax, data, values, vmin, vmax, vectors, stride, headless=False, reference=None):
+def class_color_grid(labels, shown_labels):
+    """[R, R] array of category colors for a grid of class ids (other classes in gray)."""
+    return np.array(palette(shown_labels), dtype=object)[label_colors(labels, shown_labels)]
+
+
+def field_panel(ax, data, vectors, norms, stride, log_range, colors=None, headless=False, reference=None):
+    """Arrow field on a blank background with the argmax boundaries, optional overlay and the anchors."""
     axis_u, axis_v = data['axis_u'], data['axis_v']
-    im = ax.imshow(values, origin='lower', extent=pixel_extent(axis_u, axis_v), cmap=SEQUENTIAL_BLUE, vmin=vmin,
-                   vmax=vmax, interpolation='nearest')
-    if data.get('overlay') is not None:
-        data['overlay'](ax)
-    draw_decision_boundaries(ax, axis_u, axis_v, data['labels'])
-    draw_field_arrows(ax, axis_u, axis_v, vectors, stride, headless=headless)
-    draw_anchor_points(ax, data['anchor_coords'], data['anchor_names'], reference=reference)
     ax.set_xlim(axis_u[0], axis_u[-1])
     ax.set_ylim(axis_v[0], axis_v[-1])
-    return im
+    if data.get('overlay') is not None:
+        data['overlay'](ax)
+    draw_decision_boundaries(ax, axis_u, axis_v, data['labels'], color=TEXT_SECONDARY, outline=SURFACE)
+    quiver = draw_field_arrows(ax, axis_u, axis_v, vectors, norms, stride, log_range, colors=colors, headless=headless)
+    draw_anchor_points(ax, data['anchor_coords'], data['anchor_names'], reference=reference)
+    return quiver
 
 
 def save(fig, path):
@@ -152,32 +183,34 @@ def save(fig, path):
 # ----------------------------------------------------------------------------------------------------------------------
 
 def plot_anchor_gradients(data, save_path, stride):
-    """One panel per anchor a: |grad ln P(y_a)| heat map with unit arrows of its direction."""
+    """
+    One panel per anchor a: arrows along grad ln P(y_a), length affine in log10 of its magnitude (shared across
+    panels), colored by the argmax class at the arrow.
+    """
     K = len(data['anchor_names'])
-    values = log10(data['anchor_norms'])
-    vmin, vmax = np.percentile(values, 0.5), values.max()
-    fig, axes = plt.subplots(1, K, figsize=(5.6 * K, 5.4), facecolor=SURFACE, squeeze=False)
+    log_range = log_length_range(data['anchor_norms'])
+    shown = data['shown_labels']
+    colors = class_color_grid(data['labels'], shown)
+    fig, axes = plt.subplots(1, K, figsize=(5.6 * K, 5.6), facecolor=SURFACE, squeeze=False)
     axes = axes[0]
     for a, ax in enumerate(axes):
-        im = heatmap_panel(ax, data, values[a], vmin, vmax, data['anchor_vectors'][a], stride, reference=a)
+        quiver = field_panel(ax, data, data['anchor_vectors'][a], data['anchor_norms'][a], stride, log_range,
+                             colors=colors, reference=a)
         style_axes(ax, data['xlabel'], data['ylabel'] if a == 0 else None)
         ax.set_title(f"reference {data['anchor_names'][a]}  (ŷ = {data['label_text'][data['anchor_labels'][a]]})",
                      color=TEXT_PRIMARY, fontsize=12)
-    add_colorbar(fig, im, axes.tolist(), r"$\log_{10}\, \|\nabla \ln P_x(\hat{y}_a)\|$")
-    fig.suptitle("Gradient of the reference anchor's argmax log-probability (arrows: direction of steepest ascent)\n"
+    add_length_key(axes[-1], quiver, log_range, max_arrow_length(data['axis_u'], stride),
+                   r"$\|\nabla \ln P_x(\hat{y}_a)\|$")
+    fig.legend(handles=legend_handles(data['labels'], shown, data['label_text'], palette(shown)),
+               title="arrow color: argmax at the arrow", loc='upper center', bbox_to_anchor=(0.5, 0.02),
+               ncol=min(len(shown) + 1, 8), frameon=False, labelcolor=TEXT_PRIMARY)
+    fig.suptitle("Gradient of the reference anchor's argmax log-probability (arrow length: log10 magnitude)\n"
                  f"{data['subtitle']}", color=TEXT_SECONDARY, fontsize=13)
     save(fig, save_path)
 
 
 def plot_maxnorm_gradient(data, save_path, stride, max_label_classes=7):
-    """Left: the max-norm row's gradient; right: which class that row belongs to."""
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5.6), facecolor=SURFACE)
-    values = log10(data['maxnorm_norms'])
-    im = heatmap_panel(axes[0], data, values, np.percentile(values, 0.5), values.max(), data['maxnorm_vectors'], stride)
-    style_axes(axes[0], data['xlabel'], data['ylabel'])
-    axes[0].set_title("Max-norm row of $d \\ln P / dx$", color=TEXT_PRIMARY, fontsize=12)
-    add_colorbar(fig, im, axes[0], r"$\log_{10} \max_k \|\nabla \ln P_x(k)\|$")
-
+    """Left: the max-norm row's gradient, colored by its class; right: the map of that class."""
     tokens = data['maxnorm_tokens']
     shown = data.get('maxnorm_shown_labels')  # Fixed class order (toy); otherwise the most frequent tokens
     if shown is None:
@@ -185,6 +218,15 @@ def plot_maxnorm_gradient(data, save_path, stride, max_label_classes=7):
         shown = ids[np.argsort(-counts)][:max_label_classes].tolist()
     colors = palette(shown)
     axis_u, axis_v = data['axis_u'], data['axis_v']
+
+    fig, axes = plt.subplots(1, 2, figsize=(14.5, 5.8), facecolor=SURFACE, gridspec_kw={'wspace': 0.55})
+    log_range = log_length_range(data['maxnorm_norms'])
+    quiver = field_panel(axes[0], data, data['maxnorm_vectors'], data['maxnorm_norms'], stride, log_range,
+                         colors=class_color_grid(tokens, shown))
+    style_axes(axes[0], data['xlabel'], data['ylabel'])
+    axes[0].set_title("Max-norm row of $d \\ln P / dx$ (color: its class k)", color=TEXT_PRIMARY, fontsize=12)
+    add_length_key(axes[0], quiver, log_range, max_arrow_length(axis_u, stride), r"$\max_k \|\nabla \ln P_x(k)\|$")
+
     axes[1].imshow(label_colors(tokens, shown), origin='lower', extent=pixel_extent(axis_u, axis_v),
                    cmap=ListedColormap(colors), vmin=-0.5, vmax=len(colors) - 0.5, interpolation='nearest')
     draw_decision_boundaries(axes[1], axis_u, axis_v, data['labels'])
@@ -201,14 +243,13 @@ def plot_maxnorm_gradient(data, save_path, stride, max_label_classes=7):
 
 
 def plot_singular_direction(data, save_path, stride):
-    """Top singular value of d ln P / dx on the surface, with its (sign-free) direction as segments."""
-    fig, ax = plt.subplots(figsize=(7, 6), facecolor=SURFACE)
-    values = log10(data['singular_sigma'])
-    im = heatmap_panel(ax, data, values, np.percentile(values, 0.5), values.max(), data['singular_vectors'], stride,
-                       headless=True)
+    """Top singular direction of d ln P / dx on the surface as segments (sign-free), length by log10 sigma_max."""
+    fig, ax = plt.subplots(figsize=(7.5, 6.2), facecolor=SURFACE)
+    log_range = log_length_range(data['singular_sigma'])
+    quiver = field_panel(ax, data, data['singular_vectors'], data['singular_sigma'], stride, log_range, headless=True)
     style_axes(ax, data['xlabel'], data['ylabel'])
     ax.set_title("Top singular direction of $d \\ln P / dx$ (segments: sign-free)", color=TEXT_PRIMARY, fontsize=12)
-    add_colorbar(fig, im, ax, r"$\log_{10} \sigma_{\max}$")
+    add_length_key(ax, quiver, log_range, max_arrow_length(data['axis_u'], stride), r"$\sigma_{\max}$")
     fig.suptitle(data['subtitle'], color=TEXT_SECONDARY, fontsize=12)
     save(fig, save_path)
 
@@ -286,8 +327,25 @@ def plot_trajectories(traj, save_path, stride):
     save(fig, save_path)
 
 
+def draw_transported_boundaries(ax, grid_points, labels):
+    """
+    Boundaries between the final-argmax regions of the grid, drawn on the grid as it sits at some layer: the 0.5 level
+    set of each class's indicator over the (deformed) mesh grid_points [R_v, R_u, 2].
+    """
+    for label in np.unique(labels):
+        mask = (labels == label).astype(float)
+        if mask.all():
+            continue
+        cs = ax.contour(grid_points[..., 0], grid_points[..., 1], mask, levels=[0.5], colors=TEXT_SECONDARY,
+                        linewidths=1.0, zorder=2)
+        cs.set(path_effects=[pe.Stroke(linewidth=2.4, foreground=SURFACE), pe.Normal()])
+
+
 def plot_block_updates(traj, save_path, stride, ncols=4):
-    """One panel per block: the block's update of the subgrid points, from layer l to l + 1, in anchor-relative coordinates."""
+    """
+    One panel per block: the block's update of the subgrid points, from layer l to l + 1, in anchor-relative
+    coordinates, over the final-argmax boundaries of the whole grid carried to the block's input (layer l).
+    """
     coords = traj['coords']
     n_steps = coords.shape[0] - 1
     idx = trajectory_subsample(traj, stride)
@@ -295,12 +353,15 @@ def plot_block_updates(traj, save_path, stride, ncols=4):
     colors = palette(shown)
     arrow_colors = [colors[c] for c in label_colors(traj['final_labels'], shown)[idx]]
     xlim, ylim = frame_limits(coords[:, idx, :])
+    R_v, R_u = traj['grid_shape']
+    final_grid = traj['final_labels'].reshape(R_v, R_u)
     nrows = int(np.ceil(n_steps / ncols))
     fig, axes = plt.subplots(nrows, ncols, figsize=(4.2 * ncols, 4.2 * nrows), facecolor=SURFACE, squeeze=False)
     for step, ax in enumerate(axes.ravel()):
         if step >= n_steps:
             ax.axis('off')
             continue
+        draw_transported_boundaries(ax, coords[step].reshape(R_v, R_u, 2), final_grid)
         start, end = coords[step, idx], coords[step + 1, idx]
         ax.quiver(start[:, 0], start[:, 1], end[:, 0] - start[:, 0], end[:, 1] - start[:, 1], color=arrow_colors,
                   angles='xy', scale_units='xy', scale=1, width=0.004, headwidth=4, headlength=4, headaxislength=3.5,
@@ -308,8 +369,9 @@ def plot_block_updates(traj, save_path, stride, ncols=4):
         style_frame_axes(ax, traj, xlim, ylim, labels=False)
         off = np.median(traj['off_plane'][step + 1])
         ax.set_title(f"{traj['layer_names'][step + 1]}  (off-plane {off:.2f})", color=TEXT_PRIMARY, fontsize=11)
-    fig.suptitle("Update of each block in anchor-relative coordinates (arrow color: final argmax; "
-                 "off-plane: median distance from the anchors' plane / mean anchor distance)\n"
+    fig.suptitle("Update of each block in anchor-relative coordinates (arrow color: final argmax; lines: final-argmax "
+                 "boundaries of the grid at the block's input;\noff-plane: median distance from the anchors' plane / "
+                 "mean anchor distance)\n"
                  f"{traj['subtitle']}", color=TEXT_SECONDARY, fontsize=12)
     fig.tight_layout()
     save(fig, save_path)
