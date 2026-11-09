@@ -16,14 +16,19 @@ def pixel_extent(axis_u: np.ndarray, axis_v: np.ndarray):
     return (axis_u[0] - du / 2, axis_u[-1] + du / 2, axis_v[0] - dv / 2, axis_v[-1] + dv / 2)
 
 
-def draw_decision_boundaries(ax, axis_u, axis_v, label_grid, color='white', outline=TEXT_PRIMARY):
-    """Boundaries between argmax regions: the 0.5 level set of each label's indicator on the grid [len(v), len(u)]."""
+def draw_decision_boundaries(ax, axis_u, axis_v, label_grid, color='white', outline=TEXT_PRIMARY, linestyle='solid',
+                             linewidth=1.2):
+    """
+    Boundaries between argmax regions: the 0.5 level set of each label's indicator on the grid [len(v), len(u)].
+    outline None draws the lines without the outline stroke.
+    """
     for label in np.unique(label_grid):
         mask = (label_grid == label).astype(float)
         if mask.all():
             continue
-        cs = ax.contour(axis_u, axis_v, mask, levels=[0.5], colors=color, linewidths=1.2)
-        cs.set(path_effects=[pe.Stroke(linewidth=2.6, foreground=outline), pe.Normal()])
+        cs = ax.contour(axis_u, axis_v, mask, levels=[0.5], colors=color, linewidths=linewidth, linestyles=linestyle)
+        if outline is not None:
+            cs.set(path_effects=[pe.Stroke(linewidth=linewidth + 1.4, foreground=outline), pe.Normal()])
 
 
 def draw_region_labels(ax, axis_u, axis_v, label_grid, label_text: dict, labels_to_annotate, min_fraction=0.01):

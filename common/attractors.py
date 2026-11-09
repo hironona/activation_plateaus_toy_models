@@ -97,6 +97,20 @@ def pooled_gradient_fields(logits: torch.Tensor, logit_jacobian: torch.Tensor, m
     }
 
 
+def class_gradient_field(logits: torch.Tensor, logit_jacobian: torch.Tensor, metric: torch.Tensor,
+                         classes: torch.Tensor):
+    """
+    G^-1 grad ln P(classes[b] | x_b) [B, 2] and its metric norm [B]: the gradient of one class per point (e.g. the
+    task's true argmax class at the point), from the logits [B, V], d logits / dc [B, V, 2] and the metric [B, 2, 2].
+    """
+    logits, J_z, G = logits.double(), logit_jacobian.double(), metric.double()
+    p = torch.softmax(logits, dim=-1)
+    rows = J_z[torch.arange(J_z.shape[0], device=J_z.device), classes] - torch.einsum('bv,bvi->bi', p, J_z)
+    vectors = torch.einsum('bij,bj->bi', torch.linalg.inv(G), rows)
+    norms = torch.einsum('bi,bi->b', rows, vectors).clamp_min(0).sqrt()
+    return vectors, norms
+
+
 def anchor_class_pairs(anchor_labels, mode: str = 'all') -> List[tuple]:
     """
     Pairs (i, j) of anchors whose argmax classes differ, one per class pair:
@@ -191,13 +205,17 @@ def boundary_windows(axis_u: np.ndarray, axis_v: np.ndarray, labels: np.ndarray,
 
 
 def window_gradient_fields(logits_fn: Callable, to_ambient: Callable, coords: torch.Tensor, anchor_labels: torch.Tensor,
-                           batch_size: int) -> Dict[str, torch.Tensor]:
+                           batch_size: int, true_argmax: Optional[Callable] = None) -> Dict[str, torch.Tensor]:
     """
     Gradient fields of pooled_gradient_fields and the argmax class ('labels' [B]) on the points of one zoom window,
     in batches; tensors on the CPU. logits_fn: coords [B, 2] -> logits [B, V]; to_ambient: coords -> activations.
+    true_argmax (numpy activations [B, d] -> true argmax class [B]) adds 'true_labels' and the gradient of the model's
+    log-probability of that class ('true_vectors', 'true_norms').
     """
     keys = ['anchor_vectors', 'anchor_norms', 'maxnorm_vectors', 'maxnorm_norms', 'maxnorm_tokens', 'singular_vectors',
             'singular_sigma', 'labels']
+    if true_argmax is not None:
+        keys += ['true_labels', 'true_vectors', 'true_norms']
     results = {key: [] for key in keys}
     for start in range(0, coords.shape[0], batch_size):
         c = coords[start:start + batch_size]
@@ -206,6 +224,10 @@ def window_gradient_fields(logits_fn: Callable, to_ambient: Callable, coords: to
         metric = surface_metric(to_ambient, c)
         fields = pooled_gradient_fields(logits, logit_jac, metric, anchor_labels)
         fields['labels'] = logits.argmax(dim=-1)
+        if true_argmax is not None:
+            true_labels = torch.from_numpy(true_argmax(to_ambient(c).detach().cpu().numpy())).to(c.device)
+            fields['true_labels'] = true_labels
+            fields['true_vectors'], fields['true_norms'] = class_gradient_field(logits, logit_jac, metric, true_labels)
         for key in keys:
             value = fields[key]
             results[key].append(value.float().cpu() if value.is_floating_point() else value.cpu())
@@ -217,12 +239,14 @@ def window_gradient_fields(logits_fn: Callable, to_ambient: Callable, coords: to
 
 
 def fill_zoom_windows(logits_fn: Callable, to_ambient: Callable, windows: List[Dict], resolution: int,
-                      anchor_labels: torch.Tensor, batch_size: int, device=None) -> List[Dict]:
+                      anchor_labels: torch.Tensor, batch_size: int, device=None,
+                      true_argmax: Optional[Callable] = None) -> List[Dict]:
     """
     Recompute the gradient fields of every window (from boundary_windows) on a resolution x resolution grid over its
     bounds. Adds 'axis_u', 'axis_v' [r], the fields of window_gradient_fields reshaped to the grid ([r, r, ...]) and,
     for the window's two anchors i, j, 'pair_vectors' [2, r, r, 2] / 'pair_norms' [2, r, r]: the gradients of
-    ln P(y_i) and ln P(y_j) (rows i and j of the anchor fields), as numpy arrays.
+    ln P(y_i) and ln P(y_j) (rows i and j of the anchor fields), as numpy arrays; with true_argmax also the true-class
+    fields of window_gradient_fields.
     """
     for w in windows:
         u0, u1, v0, v1 = w['bounds']
@@ -231,7 +255,7 @@ def fill_zoom_windows(logits_fn: Callable, to_ambient: Callable, windows: List[D
         coords = grid_coords(axis_u, axis_v)
         if device is not None:
             coords = coords.to(device)
-        fields = window_gradient_fields(logits_fn, to_ambient, coords, anchor_labels, batch_size)
+        fields = window_gradient_fields(logits_fn, to_ambient, coords, anchor_labels, batch_size, true_argmax)
         w['axis_u'], w['axis_v'] = axis_u.numpy(), axis_v.numpy()
         for key, value in fields.items():
             value = value.numpy()

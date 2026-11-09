@@ -13,6 +13,8 @@ Gradient figures take a dict with
     maxnorm_vectors [R, R, 2], maxnorm_norms [R, R], maxnorm_tokens [R, R]
     maxnorm_shown_labels (optional)  fixed color order of the max-norm classes (default: most frequent first)
     singular_vectors [R, R, 2], singular_sigma [R, R]
+    true_labels [R, R], true_vectors [R, R, 2], true_norms [R, R] (optional; plot_true_class_gradient): the task's true
+                                     argmax class at each point and the model's G^-1 grad ln P(true class)
     overlay (optional)               callable(ax) drawing extra context (e.g. input-density contours)
 Trajectory figures take a dict with
     layer_names [n_layers], frame_names [3], grid_shape (R, R), subtitle
@@ -126,7 +128,7 @@ def add_length_key(ax, quiver, log_range, max_length, title, x=1.05):
         y = 0.93 - 0.08 * i
         ax.quiverkey(quiver, x, y, float(arrow_length(value, log_range, max_length)), '', labelpos='E',
                      coordinates='axes', color=TEXT_PRIMARY)
-        ax.text(x + 0.05, y, f"$10^{{{value:.1f}}}$", transform=ax.transAxes, ha='left', va='center', fontsize=9,
+        ax.text(x + 0.05, y, f"$10^{{{round(float(value), 1) + 0.0:.1f}}}$", transform=ax.transAxes, ha='left', va='center', fontsize=9,
                 color=TEXT_SECONDARY)
 
 
@@ -262,6 +264,33 @@ def plot_singular_direction(data, save_path, stride):
     save(fig, save_path)
 
 
+def plot_true_class_gradient(data, save_path, stride):
+    """
+    Gradient of the model's log-probability of the task's true argmax class y*(x) at each point, colored by y*(x), with
+    length affine in log10 of its magnitude; solid lines: true argmax boundaries, dashed: the model's.
+    """
+    true_labels, shown = data['true_labels'], data['shown_labels']
+    axis_u, axis_v = data['axis_u'], data['axis_v']
+    fig, ax = plt.subplots(figsize=(7.8, 6.6), facecolor=SURFACE)
+    log_range = log_length_range(data['true_norms'])
+    quiver = field_panel(ax, {**data, 'labels': true_labels}, data['true_vectors'], data['true_norms'], stride,
+                         log_range, colors=class_color_grid(true_labels, shown))
+    draw_decision_boundaries(ax, axis_u, axis_v, data['labels'], color=TEXT_PRIMARY, outline=None, linestyle='--',
+                             linewidth=1.0)
+    style_axes(ax, data['xlabel'], data['ylabel'])
+    mismatch = (data['labels'] != true_labels).mean()
+    ax.set_title(f"Model argmax ≠ true argmax on {mismatch:.1%} of the grid", color=TEXT_PRIMARY, fontsize=11)
+    add_length_key(ax, quiver, log_range, max_arrow_length(axis_u, stride), r"$\|\nabla \ln P_x(y^*(x))\|$")
+    handles = legend_handles(true_labels, shown, data['label_text'], palette(shown))
+    handles += [Line2D([], [], color=TEXT_SECONDARY, linewidth=1.2, label="true argmax boundary"),
+                Line2D([], [], color=TEXT_PRIMARY, linewidth=1.0, linestyle='--', label="model argmax boundary")]
+    fig.legend(handles=handles, title="arrow color: true argmax class y*(x)", loc='upper center',
+               bbox_to_anchor=(0.5, 0.03), ncol=3, frameon=False, labelcolor=TEXT_PRIMARY)
+    fig.suptitle("Gradient of the model's log-probability of the true argmax class (arrow length: log10 magnitude)\n"
+                 f"{data['subtitle']}", color=TEXT_SECONDARY, fontsize=12, y=1.0)
+    save(fig, save_path)
+
+
 # ----------------------------------------------------------------------------------------------------------------------
 # Boundary zooms
 # ----------------------------------------------------------------------------------------------------------------------
@@ -291,6 +320,8 @@ def plot_boundary_zoom(data, windows, save_path, stride, max_label_classes=7):
     recomputed on a finer local grid:
         1. the full-grid argmax map with the window outlined
         2. grad ln P(a)    3. grad ln P(b)   (colored by the argmax at the arrow; one shared length scale)
+        (windows with true_labels: grad ln P(y*(x)) of the task's true argmax class, colored by y*(x); solid lines:
+         true argmax boundaries, dashed: the model's, as in plot_true_class_gradient)
         4. the max-norm row of d ln P / dx, colored by its class
         5. the top singular direction (sign-free segments)
     Arrow lengths share one log10 scale per field across the windows; the lines are the window's own argmax boundaries.
@@ -304,10 +335,15 @@ def plot_boundary_zoom(data, windows, save_path, stride, max_label_classes=7):
         'maxnorm': log_length_range(np.concatenate([w['maxnorm_norms'].ravel() for w in windows])),
         'singular': log_length_range(np.concatenate([w['singular_sigma'].ravel() for w in windows])),
     }
+    has_true = 'true_labels' in windows[0]
+    if has_true:
+        log_ranges['true'] = log_length_range(np.concatenate([w['true_norms'].ravel() for w in windows]))
     axis_u, axis_v = data['axis_u'], data['axis_v']
     coarse_step = axis_u[1] - axis_u[0]
+    n_cols = 5 + has_true
+    col_maxnorm, col_singular = 3 + has_true, 4 + has_true
 
-    fig, axes = plt.subplots(n, 5, figsize=(28.5, 5.3 * n), facecolor=SURFACE, squeeze=False,
+    fig, axes = plt.subplots(n, n_cols, figsize=(5.7 * n_cols, 5.3 * n), facecolor=SURFACE, squeeze=False,
                              gridspec_kw={'wspace': 0.55, 'hspace': 0.36})
     for i, (w, row) in enumerate(zip(windows, axes)):
         a, b = w['pair']
@@ -346,7 +382,21 @@ def plot_boundary_zoom(data, windows, save_path, stride, max_label_classes=7):
                 add_length_key(ax, quiver, log_ranges['pair'], max_arrow_length(w['axis_u'], stride),
                                r"$\|\nabla \ln P_x(y)\|$ (both)")
 
-        ax = row[3]
+        if has_true:
+            ax = row[3]
+            quiver = field_panel(ax, {**window_data, 'labels': w['true_labels']}, w['true_vectors'], w['true_norms'],
+                                 stride, log_ranges['true'], colors=class_color_grid(w['true_labels'], shown))
+            draw_decision_boundaries(ax, w['axis_u'], w['axis_v'], w['labels'], color=TEXT_PRIMARY, outline=None,
+                                     linestyle='--', linewidth=1.0)
+            style_axes(ax, data['xlabel'] if last else None)
+            mismatch = (w['labels'] != w['true_labels']).mean()
+            ax.set_title(r"$\nabla \ln P(y^*(x))$, true argmax" + f"\nmodel ≠ true on {mismatch:.1%}",
+                         color=TEXT_PRIMARY, fontsize=11)
+            if i == 0:
+                add_length_key(ax, quiver, log_ranges['true'], max_arrow_length(w['axis_u'], stride),
+                               r"$\|\nabla \ln P_x(y^*(x))\|$")
+
+        ax = row[col_maxnorm]
         quiver = field_panel(ax, window_data, w['maxnorm_vectors'], w['maxnorm_norms'], stride, log_ranges['maxnorm'],
                              colors=class_color_grid(w['maxnorm_tokens'], max_shown))
         style_axes(ax, data['xlabel'] if last else None)
@@ -355,7 +405,7 @@ def plot_boundary_zoom(data, windows, save_path, stride, max_label_classes=7):
             add_length_key(ax, quiver, log_ranges['maxnorm'], max_arrow_length(w['axis_u'], stride),
                            r"$\max_k \|\nabla \ln P_x(k)\|$")
 
-        ax = row[4]
+        ax = row[col_singular]
         quiver = field_panel(ax, window_data, w['singular_vectors'], w['singular_sigma'], stride,
                              log_ranges['singular'], headless=True)
         style_axes(ax, data['xlabel'] if last else None)
@@ -365,8 +415,13 @@ def plot_boundary_zoom(data, windows, save_path, stride, max_label_classes=7):
 
     window_labels = np.concatenate([w['labels'].ravel() for w in windows])
     window_tokens = np.concatenate([w['maxnorm_tokens'].ravel() for w in windows])
-    legend = fig.legend(handles=legend_handles(window_labels, shown, label_text, colors),
-                        title="map and class-gradient arrows: argmax class (share in the windows)", loc='upper left',
+    handles = legend_handles(window_labels, shown, label_text, colors)
+    title = "map and class-gradient arrows: argmax class (share in the windows)"
+    if has_true:
+        handles += [Line2D([], [], color=TEXT_SECONDARY, linewidth=1.2, label="true argmax boundary"),
+                    Line2D([], [], color=TEXT_PRIMARY, linewidth=1.0, linestyle='--', label="model argmax boundary")]
+        title = "map and class-gradient arrows: argmax class (share in the windows); true-class arrows: y*(x)"
+    legend = fig.legend(handles=handles, title=title, loc='upper left',
                         bbox_to_anchor=(0.12, 0.06), ncol=min(len(shown) + 1, 4), frameon=False, labelcolor=TEXT_PRIMARY)
     fig.add_artist(legend)
     fig.legend(handles=legend_handles(window_tokens, max_shown, label_text, palette(max_shown)),
